@@ -46,8 +46,14 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   // output to data memory
   if_c_obi.master     m_c_obi_data_if,
 
+  // LSU pipeline
+  input lsu_pipe_t    lsu_pipe_i,               
+
   // ID/EX pipeline
-  input id_ex_pipe_t  id_ex_pipe_i,
+  //input id_ex_pipe_t  id_ex_pipe_i,
+
+  // Scoreboard entry 
+  output scoreboard_entries_t scoreboard_entries_o,
 
   // Control outputs
   output logic        busy_o,
@@ -187,16 +193,17 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   // Transaction (before aligner)
   // Generate address from operands (atomic memory transactions do not use an address offset computation)
   always_comb begin
-    trans.addr  = id_ex_pipe_i.lsu_atop[5] ? id_ex_pipe_i.alu_operand_a : (id_ex_pipe_i.alu_operand_a + id_ex_pipe_i.alu_operand_b);
-    trans.we    = id_ex_pipe_i.lsu_we;
-    trans.size  = id_ex_pipe_i.lsu_size;
-    trans.wdata = id_ex_pipe_i.operand_c;
+    trans.addr  = lsu_pipe_i.lsu_atop[5] ? lsu_pipe_i.alu_operand_a : (lsu_pipe_i.alu_operand_a + lsu_pipe_i.alu_operand_b);
+    trans.we    = lsu_pipe_i.lsu_we;
+    trans.size  = lsu_pipe_i.lsu_size;
+    trans.wdata = lsu_pipe_i.operand_c;
     trans.mode  = PRIV_LVL_M; // Machine mode
     trans.dbg   = ctrl_fsm_i.debug_mode;
 
-    trans.atop  = id_ex_pipe_i.lsu_atop;
-    trans.sext  = id_ex_pipe_i.lsu_sext;
+    trans.atop  = lsu_pipe_i.lsu_atop;
+    trans.sext  = lsu_pipe_i.lsu_sext;
   end
+
 
   // Set outputs for trigger module
   assign lsu_addr_o = wpt_trans.addr;
@@ -479,7 +486,7 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   assign trans_ready     = wpt_trans_ready;
 
   // Indicate if transaction is part of a PUSH/POP sequence
-  assign wpt_trans_pushpop = id_ex_pipe_i.instr_meta.pushpop;
+  assign wpt_trans_pushpop = lsu_pipe_i.instr_meta.pushpop;
 
   // Transaction request generation
   // OBI compatible (avoids combinatorial path from data_rvalid_i to data_req_o). Multiple trans_* transactions can be
@@ -852,5 +859,68 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
       assign xif_mem_result_if.mem_result.dbg   = '0;
     end
   endgenerate
+
+   // Register for scoreboard entry 
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (rst_n == 1'b0) begin
+      scoreboard_entries_o.pc            <= 32'b0;
+      scoreboard_entries_o.instr_id      <= 5'b0;
+
+      //scoreboard_entries_o.operand1      <= 32'b0;
+      //scoreboard_entries_o.operand2      <= 32'b0;
+      //scoreboard_entries_o.imm           <= 32'b0;
+
+      scoreboard_entries_o.LSU_busy      <= 1'b0;
+      scoreboard_entries_o.other_FU_busy <= 1'b0;
+      scoreboard_entries_o.opcode        <= 7'b0;
+      scoreboard_entries_o.rd            <= 5'b0;
+      scoreboard_entries_o.rs1           <= 5'b0;
+      scoreboard_entries_o.rs2           <= 5'b0; 
+      //scoreboard_entries_o.result        <= 32'b0; 
+
+      scoreboard_entries_o.valid         <= 1'b0;
+      scoreboard_entries_o.valid_ex      <= 1'b0;
+      scoreboard_entries_o.valid_wb      <= 1'b0;
+      scoreboard_entries_o.exception     <= 1'b0;
+      //scoreboard_entries_o.cause       <= 10'b0;
+    end else begin
+      scoreboard_entries_o.pc       <= 1'b0;
+      scoreboard_entries_o.instr_id <= 5'b0;
+
+      scoreboard_entries_o.LSU_busy      <= 1'b0;
+      scoreboard_entries_o.other_FU_busy <= 1'b0;
+
+      //scoreboard_entries_o.operand1 <= operand_a;
+      //scoreboard_entries_o.operand2 <= operand_b;
+      scoreboard_entries_o.lsu_en   <= 1'b0;    // Checking if LSU is busy
+
+      // Checking if other functional units are busy
+      if(valid_0_o) begin
+        scoreboard_entries_o.valid_ex <= 1'b1;
+      end else begin
+        scoreboard_entries_o.valid_ex <= 1'b0;
+      end
+
+      if(valid_1_i) begin
+        scoreboard_entries_o.valid_wb <= 1'b1;
+      end else begin
+        scoreboard_entries_o.valid_wb <= 1'b0;
+      end
+
+      if(!ready_0_o) begin
+        scoreboard_entries_o.LSU_busy <= 1'b1;
+      end else begin
+        scoreboard_entries_o.LSU_busy <= 1'b0;
+      end
+      scoreboard_entries_o.opcode        <= 1'b0;
+      scoreboard_entries_o.rd            <= 1'b0;
+      scoreboard_entries_o.rs1           <= 1'b0;
+      scoreboard_entries_o.rs2           <= 1'b0;
+
+      scoreboard_entries_o.valid          <= 1'b0;
+      scoreboard_entries_o.exception      <= 1'b0;
+      scoreboard_entries_o.valid_other_fu <= 1'b0;
+    end
+  end
 
 endmodule

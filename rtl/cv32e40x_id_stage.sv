@@ -54,8 +54,14 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
   // ID/EX pipeline
   output id_ex_pipe_t id_ex_pipe_o,
 
+  // LSU pipeline
+  output lsu_pipe_t   lsu_pipe_o,
+
   // EX/WB pipeline
   input  ex_wb_pipe_t ex_wb_pipe_i,
+
+  // Scoreboard entry
+  output scoreboard_entries_t scoreboard_entries_o,
 
   // Controller
   input  ctrl_byp_t   ctrl_byp_i,
@@ -275,6 +281,31 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
 
   // Detect first half of table jumps
   assign tbljmp_first = if_id_pipe_i.instr_meta.tbljmp ? !if_id_pipe_i.last_op : 1'b0;
+
+
+  // Initalize scoreboard_entry
+
+  // initial begin
+  //   scoreboard_entries_o.pc            = 32'b0;
+  //   scoreboard_entries_o.instr_id      = 5'b0;
+
+  //   scoreboard_entries_o.operand1      = 32'b0;
+  //   scoreboard_entries_o.operand2      = 32'b0;
+  //   scoreboard_entries_o.imm           = 32'b0;
+
+  //   scoreboard_entries_o.LSU_busy      = 1'b0;
+  //   scoreboard_entries_o.other_FU_busy = 1'b0;
+  //   scoreboard_entries_o.opcode        = 7'b0;
+  //   scoreboard_entries_o.rd            = 5'b0;
+  //   scoreboard_entries_o.rs1           = 5'b0;
+  //   scoreboard_entries_o.rs2           = 5'b0; 
+  //   scoreboard_entries_o.result        = 32'b0; 
+
+  //   scoreboard_entries_o.valid         = 1'b0;
+  //   scoreboard_entries_o.exception     = 1'b0;
+  //   //scoreboard_entries_o.cause         = 10'b0;
+
+  // end
 
   //////////////////////////////////////////////////////////////////
   //      _                         _____                    _    //
@@ -507,6 +538,66 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
   assign rf_we          = rf_we_dec || xif_we;
 
 
+
+  // LSU PIPELINE
+
+  always_ff @(posedge clk, negedge rst_n)
+  begin : LSU_PIPE_REGISTERS
+    if (rst_n == 1'b0)
+    begin
+
+      lsu_pipe_o.instr_valid          <= 1'b0;
+
+      lsu_pipe_o.alu_operand_a          <= 32'b0; // todo: path from data_rdata_i through WB to id_ex_pipe_o_reg_alu_operand_a seems longer than needed (too many gates in ID)
+      lsu_pipe_o.alu_operand_b          <= 32'b0;
+
+      lsu_pipe_o.operand_c              <= 32'b0;
+
+      lsu_pipe_o.lsu_en                 <= 1'b0;
+      lsu_pipe_o.lsu_we                 <= 1'b0;
+      lsu_pipe_o.lsu_size               <= 2'b0;
+      lsu_pipe_o.lsu_sext               <= 1'b0;
+      lsu_pipe_o.lsu_atop               <= 6'b0;
+
+
+
+        // Exceptions and debug
+      lsu_pipe_o.instr_meta             <= '0;
+
+    end else begin
+
+      if (id_valid_o && ex_ready_i) begin
+        lsu_pipe_o.instr_valid            <= 1'b1;
+
+        // Operands
+        if (alu_op_a_mux_sel != OP_A_NONE) begin
+          lsu_pipe_o.alu_operand_a        <= operand_a;               // Used by most ALU, CSR and LSU instructions
+        end
+        if (alu_op_b_mux_sel != OP_B_NONE) begin
+          lsu_pipe_o.alu_operand_b        <= operand_b;               // Used by most ALU, CSR and LSU instructions
+        end
+
+        if (op_c_mux_sel != OP_C_NONE)
+        begin
+          lsu_pipe_o.operand_c            <= operand_c;               // Used by LSU stores and some ALU instructions
+        end
+        
+        lsu_pipe_o.lsu_en                 <= lsu_en;
+        if (lsu_en) begin
+          lsu_pipe_o.lsu_we               <= lsu_we;
+          lsu_pipe_o.lsu_size             <= lsu_size;
+          lsu_pipe_o.lsu_sext             <= lsu_sext;
+          lsu_pipe_o.lsu_atop             <= lsu_atop;
+        end
+
+        lsu_pipe_o.instr_meta <= if_id_pipe_i.instr_meta;
+        end else if (ex_ready_i) begin
+          lsu_pipe_o.instr_valid            <= 1'b0;
+      end
+    end 
+  end
+
+
   /////////////////////////////////////////////////////////////////////////////////
   //   ___ ____        _______  __  ____ ___ ____  _____ _     ___ _   _ _____   //
   //  |_ _|  _ \      | ____\ \/ / |  _ \_ _|  _ \| ____| |   |_ _| \ | | ____|  //
@@ -629,6 +720,7 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
           id_ex_pipe_o.csr_op               <= csr_op;
         end
 
+        // These signals are used by the LSU is therefore not needed in the ID/EX pipeline 
         id_ex_pipe_o.lsu_en                 <= lsu_en;
         if (lsu_en) begin
           id_ex_pipe_o.lsu_we               <= lsu_we;
@@ -683,6 +775,59 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
       end else if (ex_ready_i) begin
         id_ex_pipe_o.instr_valid            <= 1'b0;
       end
+    end
+  end
+
+  // Register for scoreboard entry 
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (rst_n == 1'b0) begin
+      scoreboard_entries_o.pc            <= 32'b0;
+      scoreboard_entries_o.instr_id      <= 5'b0;
+
+      //scoreboard_entries_o.operand1      <= 32'b0;
+      //scoreboard_entries_o.operand2      <= 32'b0;
+      //scoreboard_entries_o.imm           <= 32'b0;
+
+      scoreboard_entries_o.LSU_busy      <= 1'b0;
+      scoreboard_entries_o.other_FU_busy <= 1'b0;
+      scoreboard_entries_o.opcode        <= 7'b0;
+      scoreboard_entries_o.rd            <= 5'b0;
+      scoreboard_entries_o.rs1           <= 5'b0;
+      scoreboard_entries_o.rs2           <= 5'b0; 
+      //scoreboard_entries_o.result        <= 32'b0; 
+
+      scoreboard_entries_o.valid         <= 1'b0;
+      scoreboard_entries_o.exception     <= 1'b0;
+      //scoreboard_entries_o.cause       <= 10'b0;
+    end else begin
+      scoreboard_entries_o.pc       <= if_id_pipe_i.pc;
+      scoreboard_entries_o.instr_id <= 5'b0;
+
+      scoreboard_entries_o.LSU_busy      <= 1'b0;
+      scoreboard_entries_o.other_FU_busy <= 1'b0;
+
+      //scoreboard_entries_o.operand1 <= operand_a;
+      //scoreboard_entries_o.operand2 <= operand_b;
+      scoreboard_entries_o.lsu_en   <= lsu_en;    // Checking if LSU is busy
+
+      // Checking if other functional units are busy
+      if((alu_en || csr_en || mul_en || div_en) && !lsu_en) begin
+        scoreboard_entries_o.other_FU <= 1'b1;
+      end else begin
+        scoreboard_entries_o.other_FU <= 1'b0;
+      end
+      
+      scoreboard_entries_o.opcode        <= instr[6:0];
+      scoreboard_entries_o.rd            <= rf_waddr;
+      scoreboard_entries_o.rs1           <= instr[REG_S1_MSB:REG_S1_LSB]; // RF address of source 1
+      scoreboard_entries_o.rs2           <= instr[REG_S2_MSB:REG_S2_LSB]; // RF address of source 2
+
+      scoreboard_entries_o.valid          <= 1'b0;
+      scoreboard_entries_o.exception      <= 1'b0;
+      scoreboard_entries_o.valid_other_fu <= 1'b0;
+      scoreboard_entries_o.valid_ex       <= 1'b0;
+      scoreboard_entries_o.valid_wb       <= 1'b0;
+
     end
   end
 

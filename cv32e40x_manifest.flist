@@ -42,6 +42,7 @@ ${DESIGN_RTL_DIR}/cv32e40x_register_file_wrapper.sv
 ${DESIGN_RTL_DIR}/cv32e40x_write_buffer.sv
 ${DESIGN_RTL_DIR}/cv32e40x_lsu_response_filter.sv
 ${DESIGN_RTL_DIR}/cv32e40x_load_store_unit.sv
+${DESIGN_RTL_DIR}/cv32e40x_scoreboard.sv
 ${DESIGN_RTL_DIR}/cv32e40x_id_stage.sv
 ${DESIGN_RTL_DIR}/cv32e40x_i_decoder.sv
 ${DESIGN_RTL_DIR}/cv32e40x_m_decoder.sv

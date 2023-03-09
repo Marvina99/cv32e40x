@@ -42,6 +42,9 @@ module cv32e40x_wb_stage import cv32e40x_pkg::*;
   // EX/WB pipeline
   input  ex_wb_pipe_t   ex_wb_pipe_i,
 
+  // Scoreboard entry
+  output scoreboard_entries_t scoreboard_entries_o,
+
   // Controller
   input  ctrl_fsm_t     ctrl_fsm_i,
 
@@ -223,5 +226,55 @@ module cv32e40x_wb_stage import cv32e40x_pkg::*;
   // todo: Handle xif_result_if.result.err as NMI (do not factor into xif_exception as that signal is for synchronous exceptions)
 
   assign xif_result_if.result_ready = ex_wb_pipe_i.instr_valid && ex_wb_pipe_i.xif_en;
+
+  // Register for scoreboard entry 
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (rst_n == 1'b0) begin
+      scoreboard_entries_o.pc            <= 32'b0;
+      scoreboard_entries_o.instr_id      <= 5'b0;
+
+      //scoreboard_entries_o.operand1      <= 32'b0;
+      //scoreboard_entries_o.operand2      <= 32'b0;
+      //scoreboard_entries_o.imm           <= 32'b0;
+
+      scoreboard_entries_o.LSU_busy      <= 1'b0;
+      scoreboard_entries_o.other_FU_busy <= 1'b0;
+      scoreboard_entries_o.opcode        <= 7'b0;
+      scoreboard_entries_o.rd            <= 5'b0;
+      scoreboard_entries_o.rs1           <= 5'b0;
+      scoreboard_entries_o.rs2           <= 5'b0; 
+      //scoreboard_entries_o.result        <= 32'b0; 
+
+      scoreboard_entries_o.valid         <= 1'b0;
+      scoreboard_entries_o.valid_ex      <= 1'b0;
+      scoreboard_entries_o.valid_wb      <= 1'b0;
+      scoreboard_entries_o.exception     <= 1'b0;
+      //scoreboard_entries_o.cause       <= 10'b0;
+    end else begin
+      scoreboard_entries_o.pc       <= 1'b0;
+      scoreboard_entries_o.instr_id <= 5'b0;
+
+      scoreboard_entries_o.LSU_busy      <= 1'b0;
+      scoreboard_entries_o.other_FU_busy <= 1'b0;
+
+      //scoreboard_entries_o.operand1 <= operand_a;
+      //scoreboard_entries_o.operand2 <= operand_b;
+      scoreboard_entries_o.lsu_en   <= 1'b0;    // Checking if LSU is busy
+
+      scoreboard_entries_o.valid    <= wb_valid; 
+
+      // Checking if the LSU is finished executing in the wb stage
+      if(lsu_valid_i) begin
+        scoreboard_entries_o.valid_wb <= 1'b1;
+      end else begin
+        scoreboard_entries_o.valid_wb <= 1'b0;
+      end
+
+      scoreboard_entries_o.opcode        <= 1'b0;
+      scoreboard_entries_o.rd            <= 1'b0;
+      scoreboard_entries_o.rs1           <= 1'b0;
+      scoreboard_entries_o.rs2           <= 1'b0;
+    end
+  end
 
 endmodule

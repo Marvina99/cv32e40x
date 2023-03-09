@@ -1103,6 +1103,26 @@ typedef struct packed {
   logic        abort_op;         // Instruction will be aborted due to known exceptions or trigger matches
 } if_id_pipe_t;
 
+// LSU pipeline  
+typedef struct packed {
+
+  // ALU
+  logic [31:0]  alu_operand_a;
+  logic [31:0]  alu_operand_b;
+  logic [31:0]  operand_c;
+
+  // LSU
+  logic         lsu_en;
+  logic         lsu_we;
+  logic [1:0]   lsu_size;
+  logic         lsu_sext;
+  logic [5:0]   lsu_atop;
+
+  instr_meta_t  instr_meta;
+  logic         instr_valid;      // instruction in EX is valid
+
+} lsu_pipe_t;
+
 // ID/EX pipeline
 typedef struct packed {
 
@@ -1340,6 +1360,38 @@ typedef struct packed {
   logic        exception_in_wb;
   logic [10:0] exception_cause_wb;
 } ctrl_fsm_t;
+
+// Scoreboard entries
+typedef struct packed {
+  logic [31:0]  pc;               // PC of instruction
+  logic [4:0]   instr_id;         // Instruction ID
+
+  logic         LSU_busy;         // Is the LSU busy
+  logic         lsu_en;            // Is it a load/store instruction
+  logic         other_FU;          // Is it not a load/store instruction
+  logic         other_FU_busy;    // Are the other functional units busy
+  logic [6:0]   opcode;           // Operation to perform 
+
+
+
+  // Operand 
+  logic [31:0] operand1;          // Operand 1
+  logic [31:0] operand2;          // Operand 2 
+  logic [31:0] imm;               // immidiate operand
+
+  rf_addr_t     rs1;              // Source register 1
+  rf_addr_t     rs2;              // Source register 2
+  rf_addr_t     rd;               // Destination register
+  //logic [31:0] result;            // Result of the operation
+
+  logic         valid;            // Ready to commit result
+  logic         valid_other_fu;   // Is the result valid for other functional units
+  logic         valid_ex;         // First half of LSU instruction finished 
+  logic         valid_wb;         // Second half of LSU instruction finished
+  logic         exception;        // Exception has occured 
+  //logic [10:0]  exception_cause;  // Exception cause
+} scoreboard_entries_t;
+
 
   ////////////////////////////////////////
   // Resolution functions

@@ -43,6 +43,9 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
   // ID/EX pipeline
   input id_ex_pipe_t  id_ex_pipe_i,
 
+  // Scoreboard entry
+  output scoreboard_entries_t scoreboard_entries_o,
+
   // CSR interface
   input  logic [31:0] csr_rdata_i,
   input  logic        csr_illegal_i,
@@ -151,7 +154,7 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
                                id_ex_pipe_i.instr.bus_resp.err           ||
                                (id_ex_pipe_i.instr.mpu_status != MPU_OK) ||
                                id_ex_pipe_i.trigger_match)               &&
-                              id_ex_pipe_i.instr_valid;
+                              id_ex_pipe_i.instr_valid; 
 
   // ALU write port mux
   always_comb
@@ -429,6 +432,56 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
         // so we introduce a bubble
         ex_wb_pipe_o.instr_valid <= 1'b0;
       end
+    end
+  end
+
+    // Register for scoreboard entry 
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (rst_n == 1'b0) begin
+      scoreboard_entries_o.pc            <= 32'b0;
+      scoreboard_entries_o.instr_id      <= 5'b0;
+
+      //scoreboard_entries_o.operand1      <= 32'b0;
+      //scoreboard_entries_o.operand2      <= 32'b0;
+      //scoreboard_entries_o.imm           <= 32'b0;
+
+      scoreboard_entries_o.LSU_busy      <= 1'b0;
+      scoreboard_entries_o.other_FU_busy <= 1'b0;
+      scoreboard_entries_o.opcode        <= 7'b0;
+      scoreboard_entries_o.rd            <= 5'b0;
+      scoreboard_entries_o.rs1           <= 5'b0;
+      scoreboard_entries_o.rs2           <= 5'b0; 
+      //scoreboard_entries_o.result        <= 32'b0; 
+
+      scoreboard_entries_o.valid         <= 1'b0;
+      scoreboard_entries_o.exception     <= 1'b0;
+      //scoreboard_entries_o.cause       <= 10'b0;
+    end else begin
+      scoreboard_entries_o.pc       <= 32'b0;
+      scoreboard_entries_o.instr_id <= 5'b0;
+
+      //scoreboard_entries_o.operand1 <= operand_a;
+      //scoreboard_entries_o.operand2 <= operand_b;
+      scoreboard_entries_o.LSU_busy   <= 1'b0;    // Checking if LSU is busy
+
+      // Checking if other functional units are busy
+      if(ex_ready_o) begin
+        scoreboard_entries_o.other_FU_busy <= 1'b1;
+      end else begin
+        scoreboard_entries_o.other_FU_busy <= 1'b0;
+      end
+
+      scoreboard_entries_o.valid          <= 1'b0;
+      scoreboard_entries_o.exception      <= 1'b0;
+      scoreboard_entries_o.valid_other_fu <= 1'b0;
+      scoreboard_entries_o.valid_ex       <= 1'b0;
+      scoreboard_entries_o.valid_wb       <= 1'b0;
+      
+      scoreboard_entries_o.opcode         <= 7'b0;
+      scoreboard_entries_o.rd             <= 5'b0;
+      scoreboard_entries_o.rs1            <= 5'b0;
+      scoreboard_entries_o.rs2            <= 5'b0; 
+
     end
   end
 

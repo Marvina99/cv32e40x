@@ -444,12 +444,12 @@ endgenerate
       cv32e40x_sequencer_sva
         sequencer_sva (.*);
 
-`ifndef FORMAL
-  bind cv32e40x_rvfi:
-    rvfi_i
-    rvfi_sim_trace
-      tracer_i(.*);
-`endif
+// `ifndef FORMAL
+//   bind cv32e40x_rvfi:
+//     rvfi_i
+//     rvfi_sim_trace
+//       tracer_i(.*);
+// `endif
 
   bind cv32e40x_rvfi:
     rvfi_i
