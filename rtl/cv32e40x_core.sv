@@ -1133,13 +1133,13 @@ scoreboard_i
   .scoreboard_entries__id_i         ( scoreboard_entries_id     ),
 
   // Scoreboard entry in EX stage
-  .scoreboard_entries_ex_i         ( scoreboard_entries_ex     ),
+  .scoreboard_entries_ex_i         ( scoreboard_entries_ex      ),
 
   // Scoreboard entry in LSU
   .scoreboard_entries_lsu_i         ( scoreboard_entries_lsu    ),
 
   // Scoreboard entry in WB stage
-  .scoreboard_entries_wb_i         ( scoreboard_entries_wb     )
+  .scoreboard_entries_wb_i         ( scoreboard_entries_wb      )
 );
 
 
