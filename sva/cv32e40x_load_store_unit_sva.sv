@@ -40,6 +40,7 @@ module cv32e40x_load_store_unit_sva
    input logic       split_q,
    input mpu_status_e lsu_mpu_status_1_o, // WB mpu status
    input ex_wb_pipe_t ex_wb_pipe_i,
+   input lsu_wb_pipe_t lsu_wb_pipe_o,
    if_c_obi.monitor  m_c_obi_data_if,
    input logic       xif_req,
    input logic       xif_res_q,
@@ -132,14 +133,14 @@ module cv32e40x_load_store_unit_sva
   // With a watchpoint match, the LSU counter may clear while WB is halted for synchronous debug entry, leaving cnt=0 while lsu_en in WB is true.
   a_cnt_zero:
   assert property (@(posedge clk) disable iff (!rst_n)
-                    (cnt_q == 2'b00) && !(ctrl_fsm_cs == DEBUG_TAKEN) |-> !(ex_wb_pipe_i.lsu_en && ex_wb_pipe_i.instr_valid))
+                    (cnt_q == 2'b00) && !(ctrl_fsm_cs == DEBUG_TAKEN) |-> !(lsu_wb_pipe_o.lsu_en && lsu_wb_pipe_o.instr_valid))
       else `uvm_error("load_store_unit", "cnt_q is zero when WB contains a valid LSU instruction")
 
   // The only cause of (cnt_q==0) with a valid LSU instruction in WB is a watchpoint trigger.
   // Assertions checks that this is the case and that a debug entry is taking place.
   a_lsu_cnt_nonzero_wpt:
   assert property (@(posedge clk) disable iff (!rst_n)
-                  (cnt_q == 2'b00) && (ex_wb_pipe_i.lsu_en && ex_wb_pipe_i.instr_valid)
+                  (cnt_q == 2'b00) && (lsu_wb_pipe_o.lsu_en && lsu_wb_pipe_o.instr_valid)
                   |->
                   $past(lsu_wpt_match_1_o) && (ctrl_fsm_cs == DEBUG_TAKEN))
       else `uvm_error("load_store_unit", "Illegal cause of cnt_q=0 while a valid LSU instruction is in WB")

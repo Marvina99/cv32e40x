@@ -1106,6 +1106,11 @@ typedef struct packed {
 // LSU pipeline  
 typedef struct packed {
 
+  logic         instr_valid;      // instruction in EX is valid
+
+  // Instruction ID
+  logic [3:0]   instruction_id;
+
   // ALU
   logic [31:0]  alu_operand_a;
   logic [31:0]  alu_operand_b;
@@ -1118,13 +1123,27 @@ typedef struct packed {
   logic         lsu_sext;
   logic [5:0]   lsu_atop;
 
+  // CSR
+  logic         csr_en;
+  csr_opcode_e  csr_op;
+
+  // Register write control
+  logic         rf_we;
+  rf_addr_t     rf_waddr;
+
+  logic        first_op;         // First part of multi operation instruction
+  logic        last_op;          // Last part of multi operation instruction
+  logic        abort_op;
+
   instr_meta_t  instr_meta;
-  logic         instr_valid;      // instruction in EX is valid
 
 } lsu_pipe_t;
 
 // ID/EX pipeline
 typedef struct packed {
+
+    // Instruction ID
+  logic [3:0]   instruction_id;
 
   // ALU
   logic         alu_en;
@@ -1151,14 +1170,7 @@ typedef struct packed {
   // CSR
   logic         csr_en;
   csr_opcode_e  csr_op;
-
-  // LSU
-  logic         lsu_en;
-  logic         lsu_we;
-  logic [1:0]   lsu_size;
-  logic         lsu_sext;
-  logic [5:0]   lsu_atop;
-
+  
   // SYS
   logic         sys_en;
   logic         sys_dret_insn;
@@ -1194,11 +1206,16 @@ typedef struct packed {
   logic         first_op;         // First part of multi operation instruction
   logic         last_op;          // Last part of multi operation instruction
   logic         abort_op;         // Instruction will be aborted due to known exceptions or trigger matches
+  logic         busy;
 
 } id_ex_pipe_t;
 
 // EX/WB pipeline
 typedef struct packed {
+
+  // Instruction ID
+  logic [3:0]   instruction_id;
+
   logic         rf_we;
   rf_addr_t     rf_waddr;
   logic [31:0]  rf_wdata;
@@ -1214,9 +1231,6 @@ typedef struct packed {
   logic [11:0]  csr_addr;
   logic [31:0]  csr_wdata;
   logic         csr_mnxti_access;
-
-  // LSU
-  logic         lsu_en;
 
   // Trigger match on insn
   logic         trigger_match;
@@ -1248,6 +1262,46 @@ typedef struct packed {
   logic         last_op;          // Last part of multi operation instruction
   logic         abort_op;         // Instruction will be aborted due to known exceptions or trigger matches
 } ex_wb_pipe_t;
+
+// LSU/WB pipeline  
+typedef struct packed {
+
+  // Instruction ID
+  logic [3:0]   instruction_id;
+
+  // Register write control
+  logic         rf_we;
+  rf_addr_t     rf_waddr;
+
+  logic         instr_valid;      // instruction in EX is valid
+
+  // ALU
+  // logic [31:0]  alu_operand_a;
+  // logic [31:0]  alu_operand_b;
+  // logic [31:0]  operand_c;
+
+  // CSR
+  logic         csr_en;
+  csr_opcode_e  csr_op;
+  logic [11:0]  csr_addr;
+  logic [31:0]  csr_wdata;
+  logic         csr_mnxti_access;
+
+  // LSU
+  logic         lsu_en;
+  logic         lsu_we;
+  logic [1:0]   lsu_size;
+  logic         lsu_sext;
+  logic [5:0]   lsu_atop;
+
+  logic        first_op;         // First part of multi operation instruction
+  logic        last_op;          // Last part of multi operation instruction
+  logic        abort_op;
+
+  instr_meta_t  instr_meta;
+
+} lsu_wb_pipe_t;
+
 
 // Performance counter events
 typedef struct packed {
@@ -1360,38 +1414,6 @@ typedef struct packed {
   logic        exception_in_wb;
   logic [10:0] exception_cause_wb;
 } ctrl_fsm_t;
-
-// Scoreboard entries
-typedef struct packed {
-  logic [31:0]  pc;               // PC of instruction
-  logic [4:0]   instr_id;         // Instruction ID
-
-  logic         LSU_busy;         // Is the LSU busy
-  logic         lsu_en;            // Is it a load/store instruction
-  logic         other_FU;          // Is it not a load/store instruction
-  logic         other_FU_busy;    // Are the other functional units busy
-  logic [6:0]   opcode;           // Operation to perform 
-
-
-
-  // Operand 
-  logic [31:0] operand1;          // Operand 1
-  logic [31:0] operand2;          // Operand 2 
-  logic [31:0] imm;               // immidiate operand
-
-  rf_addr_t     rs1;              // Source register 1
-  rf_addr_t     rs2;              // Source register 2
-  rf_addr_t     rd;               // Destination register
-  //logic [31:0] result;            // Result of the operation
-
-  logic         valid;            // Ready to commit result
-  logic         valid_other_fu;   // Is the result valid for other functional units
-  logic         valid_ex;         // First half of LSU instruction finished 
-  logic         valid_wb;         // Second half of LSU instruction finished
-  logic         exception;        // Exception has occured 
-  //logic [10:0]  exception_cause;  // Exception cause
-} scoreboard_entries_t;
-
 
   ////////////////////////////////////////
   // Resolution functions

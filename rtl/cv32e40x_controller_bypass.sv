@@ -42,7 +42,9 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
   // Pipeline registers
   input if_id_pipe_t  if_id_pipe_i,
   input id_ex_pipe_t  id_ex_pipe_i,
+  input lsu_pipe_t    lsu_pipe_i,
   input ex_wb_pipe_t  ex_wb_pipe_i,
+  input lsu_wb_pipe_t lsu_wb_pipe_i,
 
   // From ID
   input  logic        alu_jmpr_id_i,              // ALU jump register (JALR)
@@ -64,18 +66,23 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
 
   logic [REGFILE_NUM_READ_PORTS-1:0] rf_rd_ex_match;            // Register file address match (ID vs. EX). Not qualified with rf_we_ex yet.
   logic                              rf_rd_ex_jalr_match;
+  logic [REGFILE_NUM_READ_PORTS-1:0] rf_rd_lsu_match;           // Register file address match (ID vs. LSU)
+  logic                              rf_rd_lsu_jalr_match;
   logic [REGFILE_NUM_READ_PORTS-1:0] rf_rd_wb_match;            // Register file address match (ID vs. WB). Not qualified with rf_we_wb yet.
   logic                              rf_rd_wb_jalr_match;
   logic [REGFILE_NUM_READ_PORTS-1:0] rf_rd_ex_hz;
+  logic [REGFILE_NUM_READ_PORTS-1:0] rf_rd_lsu_hz;
   logic [REGFILE_NUM_READ_PORTS-1:0] rf_rd_wb_hz;
 
   logic                              csr_write_in_ex_wb;        // Detect CSR write in EX or WB (implicit and explicit)
 
   logic                              rf_we_ex;                  // EX register file write enable
+  logic                              rf_we_lsu;                 // LSU register file write enable
   logic                              rf_we_wb;                  // WB register file write enable
   logic                              lsu_en_wb;                 // WB lsu_en
 
   rf_addr_t                          rf_waddr_ex;               // EX rf_waddr
+  rf_addr_t                          rf_waddr_lsu;              // LSU rf_waddr
   rf_addr_t                          rf_waddr_wb;               // WB rf_waddr
 
   logic                              sys_mret_unqual_id;        // MRET in ID (not qualified with sys_en)
@@ -87,11 +94,14 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
   // todo: make all qualifiers here, and use those signals later in the file
 
   assign rf_we_ex = id_ex_pipe_i.rf_we && id_ex_pipe_i.instr_valid;
+  assign rf_we_lsu = lsu_pipe_i.rf_we && lsu_pipe_i.instr_valid;
   assign rf_we_wb = ex_wb_pipe_i.rf_we && ex_wb_pipe_i.instr_valid;
-  assign lsu_en_wb = ex_wb_pipe_i.lsu_en && ex_wb_pipe_i.instr_valid;
 
-  assign rf_waddr_ex = id_ex_pipe_i.rf_waddr;
-  assign rf_waddr_wb = ex_wb_pipe_i.rf_waddr; // TODO: If XIF OoO is allowed, we need to look at WB stage outputs instead
+  assign lsu_en_wb = lsu_wb_pipe_i.lsu_en && lsu_wb_pipe_i.instr_valid;
+
+  assign rf_waddr_ex  = id_ex_pipe_i.rf_waddr;
+  assign rf_waddr_lsu = lsu_pipe_i.rf_waddr;
+  assign rf_waddr_wb  = lsu_wb_pipe_i.lsu_en ? lsu_wb_pipe_i.rf_waddr : ex_wb_pipe_i.rf_waddr; // TODO: If XIF OoO is allowed, we need to look at WB stage outputs instead
 
   // The following unqualified signals are such that they can have a false positive (but no false negative).
   //
@@ -154,7 +164,7 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
   // Stall EX stage when an mnxti is in EX and an LSU instruction is in WB.
   // This is needed to make sure that any external interrupt clearing (due to a LSU instruction) gets picked
   // up correctly by the mnxti access.
-  assign ctrl_byp_o.mnxti_ex_stall = csr_mnxti_read_i && (ex_wb_pipe_i.lsu_en && ex_wb_pipe_i.instr_valid);
+  assign ctrl_byp_o.mnxti_ex_stall = csr_mnxti_read_i && (lsu_wb_pipe_i.lsu_en && lsu_wb_pipe_i.instr_valid);
 
   genvar i;
   generate
@@ -162,19 +172,23 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
       // Does register file read address match write address in EX (excluding R0)?
       assign rf_rd_ex_match[i] = (rf_waddr_ex == rf_raddr_id_i[i]) && |rf_raddr_id_i[i] && rf_re_id_i[i];
 
+      assign rf_rd_lsu_match[i] = (rf_waddr_lsu == rf_raddr_id_i[i]) && |rf_raddr_id_i[i] && rf_re_id_i[i];
+
       // Does register file read address match write address in WB (excluding R0)?
       assign rf_rd_wb_match[i] = (rf_waddr_wb == rf_raddr_id_i[i]) && |rf_raddr_id_i[i] && rf_re_id_i[i];
 
       // Load-read hazard (for any instruction following a load)
-      assign rf_rd_ex_hz[i] = rf_rd_ex_match[i];
-      assign rf_rd_wb_hz[i] = rf_rd_wb_match[i];
+      assign rf_rd_lsu_hz[i]  = rf_rd_lsu_match[i];
+      assign rf_rd_ex_hz[i]   = rf_rd_ex_match[i];
+      assign rf_rd_wb_hz[i]   = rf_rd_wb_match[i];
     end
   endgenerate
 
   // JALR rs1 match (rf_re_id_i[0] implied by JALR).
   // Not qualified yet with JALR instruction nor with read enable (implied by JALR)
-  assign rf_rd_ex_jalr_match = (rf_waddr_ex == rf_raddr_id_i[0]) && |rf_raddr_id_i[0];
-  assign rf_rd_wb_jalr_match = (rf_waddr_wb == rf_raddr_id_i[0]) && |rf_raddr_id_i[0];
+  assign rf_rd_ex_jalr_match  = (rf_waddr_ex == rf_raddr_id_i[0]) && |rf_raddr_id_i[0];
+  assign rf_rd_lsu_jalr_match = (rf_waddr_lsu == rf_raddr_id_i[0]) && |rf_raddr_id_i[0];
+  assign rf_rd_wb_jalr_match  = (rf_waddr_wb == rf_raddr_id_i[0]) && |rf_raddr_id_i[0];
 
   always_comb
   begin
@@ -194,7 +208,8 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
 
     // Stall because of load or XIF operation
     if (
-        ((id_ex_pipe_i.lsu_en || id_ex_pipe_i.xif_en) && rf_we_ex && |rf_rd_ex_hz) || // load-use hazard (EX)
+        (id_ex_pipe_i.xif_en && rf_we_ex && |rf_rd_ex_hz) || // xif hazard (EX)
+        (lsu_pipe_i.lsu_en && rf_we_lsu && |rf_rd_lsu_hz) || // load-use hazard (LSU)
         (!wb_ready_i                                  && rf_we_wb && |rf_rd_wb_hz)    // load-use hazard (WB during wait-state)
        )
     begin
@@ -209,7 +224,8 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
     if (jmpr_unqual_id &&
          ((rf_we_wb && rf_rd_wb_jalr_match && lsu_en_wb) ||
           (rf_we_wb && rf_rd_wb_jalr_match && (ex_wb_pipe_i.csr_mnxti_access && ex_wb_pipe_i.csr_en)) ||
-          (rf_we_ex && rf_rd_ex_jalr_match))) begin
+          (rf_we_ex && rf_rd_ex_jalr_match) ||
+          (rf_we_lsu && rf_rd_lsu_jalr_match))) begin
       ctrl_byp_o.jalr_stall = 1'b1;
     end else begin
       ctrl_byp_o.jalr_stall = 1'b0;
@@ -227,7 +243,7 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
     end
 
     // Stall EX when an interrupt may be enabled from WB while there is a LSU instruction in EX.
-    if (csr_irq_enable_write_i && (id_ex_pipe_i.instr_valid && id_ex_pipe_i.lsu_en)) begin
+    if (csr_irq_enable_write_i && (lsu_pipe_i.instr_valid && lsu_pipe_i.lsu_en)) begin
       ctrl_byp_o.irq_enable_stall = 1'b1;
     end
   end

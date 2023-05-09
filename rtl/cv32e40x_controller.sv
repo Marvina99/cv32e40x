@@ -64,13 +64,20 @@ module cv32e40x_controller import cv32e40x_pkg::*;
 
   input  id_ex_pipe_t id_ex_pipe_i,
 
+  input lsu_pipe_t    lsu_pipe_i,
+
   input  ex_wb_pipe_t ex_wb_pipe_i,
   input  mpu_status_e mpu_status_wb_i,            // MPU status (WB stage)
   input  logic        wpt_match_wb_i,             // LSU watchpoint trigger in WB
 
+  input lsu_wb_pipe_t lsu_wb_pipe_i,      
+
   // Last operation bits
+  input  logic        lsu_op_last_i,              // LSU contains the last operation of an instruction 
   input  logic        last_op_ex_i,               // EX contains the last operation of an instruction
   input  logic        last_op_wb_i,               // WB contains the last operation of an instruction
+
+  input  logic        first_op_lsu_i,
 
   input  logic        abort_op_wb_i,
 
@@ -119,6 +126,9 @@ module cv32e40x_controller import cv32e40x_pkg::*;
   input  logic        id_valid_i,               // ID stage is done
   input  logic        ex_ready_i,               // EX stage is ready
   input  logic        ex_valid_i,               // EX stage is done
+  input  logic        lsu_valid_i,              // LSU stage is done
+  input  logic        lsu_ready_i,              // LSU stage is ready
+  input  logic        lsu_ready_wb_i,           // WB stage of LSU is ready for new data
   input  logic        wb_ready_i,               // WB stage is ready
   input  logic        wb_valid_i,               // WB stage is done
 
@@ -174,16 +184,25 @@ module cv32e40x_controller import cv32e40x_pkg::*;
 
     // From EX stage
     .id_ex_pipe_i                ( id_ex_pipe_i             ),
+    .lsu_pipe_i                  ( lsu_pipe_i               ),
     .branch_decision_ex_i        ( branch_decision_ex_i     ),
     .ex_ready_i                  ( ex_ready_i               ),
     .ex_valid_i                  ( ex_valid_i               ),
+    .lsu_valid_i                 ( lsu_valid_i              ),
+    .lsu_ready_i                 ( lsu_ready_i              ),
+    .lsu_op_last_i               ( lsu_op_last_i            ),
     .last_op_ex_i                ( last_op_ex_i             ),
+
+    // LSU
+    .first_op_lsu_i              ( first_op_lsu_i           ),
 
     // From WB stage
     .ex_wb_pipe_i                ( ex_wb_pipe_i             ),
+    .lsu_wb_pipe_i               ( lsu_wb_pipe_i            ),
     .lsu_err_wb_i                ( lsu_err_wb_i             ),
     .mpu_status_wb_i             ( mpu_status_wb_i          ),
     .data_stall_wb_i             ( data_stall_wb_i          ),
+    .lsu_ready_wb_i              ( lsu_ready_wb_i           ),
     .wb_ready_i                  ( wb_ready_i               ),
     .wb_valid_i                  ( wb_valid_i               ),
     .last_op_wb_i                ( last_op_wb_i             ),
@@ -243,7 +262,9 @@ module cv32e40x_controller import cv32e40x_pkg::*;
     // From controller_fsm
     .if_id_pipe_i               ( if_id_pipe_i             ),
     .id_ex_pipe_i               ( id_ex_pipe_i             ),
+    .lsu_pipe_i                 ( lsu_pipe_i               ),
     .ex_wb_pipe_i               ( ex_wb_pipe_i             ),
+    .lsu_wb_pipe_i              ( lsu_wb_pipe_i            ),
 
     // From ID
     .rf_re_id_i                 ( rf_re_id_i               ),

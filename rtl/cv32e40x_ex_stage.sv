@@ -43,8 +43,7 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
   // ID/EX pipeline
   input id_ex_pipe_t  id_ex_pipe_i,
 
-  // Scoreboard entry
-  output scoreboard_entries_t scoreboard_entries_o,
+  input lsu_pipe_t    lsu_pipe_i,
 
   // CSR interface
   input  logic [31:0] csr_rdata_i,
@@ -53,6 +52,9 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
 
   // EX/WB pipeline
   output ex_wb_pipe_t ex_wb_pipe_o,
+
+  // LSU/WB pipeline
+  input  lsu_wb_pipe_t lsu_wb_pipe_i,
 
   // From controller FSM
   input  ctrl_fsm_t   ctrl_fsm_i,
@@ -73,16 +75,17 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
   output logic        lsu_valid_o,
   input  logic        lsu_ready_i,
   input  logic        lsu_split_i,      // LSU is performing first part of a misaligned/split instruction
-  input  logic        lsu_last_op_i,
-  input  logic        lsu_first_op_i,
 
   // Stage ready/valid
   output logic        ex_ready_o,       // EX stage is ready for new data
   output logic        ex_valid_o,       // EX stage has valid (non-bubble) data for next stage
   input  logic        wb_ready_i,       // WB stage is ready for new data
+  input  logic        wb_lsu_ready_i,   // WB stage for lsu is ready
 
   output logic        last_op_o,
-  output logic        first_op_o
+  output logic        first_op_o,
+
+  output logic [1:0]  priority_o        // ensuring program order
 );
 
   // Ready and valid signals
@@ -125,6 +128,10 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
   // Detect if we get an illegal CSR instruction
   logic           csr_is_illegal;
 
+  logic           mul_ready_i;
+  logic           div_ready_i;
+  
+
   assign instr_valid = id_ex_pipe_i.instr_valid && !ctrl_fsm_i.kill_ex && !ctrl_fsm_i.halt_ex;
 
   // todo: consider not factoring halt_ex into the mul/div/lsu_en_gated below
@@ -132,9 +139,12 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
   //       Maybe we need to split out valid and halt into the submodules?
   assign mul_en_gated = id_ex_pipe_i.mul_en && instr_valid; // Factoring in instr_valid to kill mul instructions on kill/halt
   assign div_en_gated = id_ex_pipe_i.div_en && instr_valid; // Factoring in instr_valid to kill div instructions on kill/halt
-  assign lsu_en_gated = id_ex_pipe_i.lsu_en && instr_valid; // Factoring in instr_valid to suppress bus transactions on kill/halt
+  assign lsu_en_gated = lsu_pipe_i.lsu_en && instr_valid; // Factoring in instr_valid to suppress bus transactions on kill/halt
 
   assign div_en = id_ex_pipe_i.div_en && id_ex_pipe_i.instr_valid; // Valid DIV in EX, not affected by kill/halt
+
+  assign mul_ready_i = !id_ex_pipe_i.mul_en || wb_ready_i;
+  assign div_ready_i = !id_ex_pipe_i.div_en || wb_ready_i;
 
   // If pipeline is handling a valid CSR AND the same instruction is accepted by the eXtension interface
   // we need to convert the instruction to an illegal instruction and signal commit_kill to the eXtension interface.
@@ -154,7 +164,7 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
                                id_ex_pipe_i.instr.bus_resp.err           ||
                                (id_ex_pipe_i.instr.mpu_status != MPU_OK) ||
                                id_ex_pipe_i.trigger_match)               &&
-                              id_ex_pipe_i.instr_valid; 
+                              id_ex_pipe_i.instr_valid;
 
   // ALU write port mux
   always_comb
@@ -176,9 +186,12 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
 
   // Detect last operation
   // Both parts of a split misaligned load/store will reach WB, but only the second half will be marked with "last_op"
-  assign last_op_o = id_ex_pipe_i.lsu_en ? (lsu_last_op_i && id_ex_pipe_i.last_op) : id_ex_pipe_i.last_op;
+  //assign last_op_o = lsu_pipe_i.lsu_en ? (lsu_last_op_i && id_ex_pipe_i.last_op) : id_ex_pipe_i.last_op;
 
-  assign first_op_o = id_ex_pipe_i.lsu_en ? (lsu_first_op_i && id_ex_pipe_i.first_op) : id_ex_pipe_i.first_op;
+  //assign first_op_o = lsu_pipe_i.lsu_en ? (lsu_first_op_i && id_ex_pipe_i.first_op) : id_ex_pipe_i.first_op;
+  
+  assign first_op_o =  id_ex_pipe_i.first_op;
+  assign last_op_o  =  id_ex_pipe_i.first_op;
 
   ////////////////////////////
   //     _    _    _   _    //
@@ -258,7 +271,7 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
          .valid_i            ( div_en_gated                         ),
          .ready_o            ( div_ready                            ),
          .valid_o            ( div_valid                            ),
-         .ready_i            ( wb_ready_i                           )
+         .ready_i            ( div_ready_i                          )
          );
 
     end
@@ -305,7 +318,7 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
          .valid_i         ( mul_en_gated                  ),
          .ready_o         ( mul_ready                     ),
          .valid_o         ( mul_valid                     ),
-         .ready_i         ( wb_ready_i                    )
+         .ready_i         ( mul_ready_i                   )
          );
 
     end
@@ -319,6 +332,38 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
     end
   endgenerate
 
+    //Checking if the current instruction in ex stage is the oldest instruction in the pipeline
+  //   always @(posedge clk, negedge rst_n) begin
+  //     if(rst_n == 1'b0) begin
+  //       program_order_o <= 1'b0;
+  //   end else begin
+  //     if(((lsu_pipe_i.instruction_id > id_ex_pipe_i.instruction_id) && id_ex_pipe_i.instruction_id != 1'b0) || lsu_pipe_i.instruction_id == 1'b0) begin
+  //       program_order_o <= 1'b1;
+  //     end else begin
+  //       program_order_o <= 1'b0;
+  //     end
+  //   end  
+  // end
+
+  always @(posedge clk, negedge rst_n) begin
+    if(rst_n == 0) begin
+      priority_o <= '0;
+    end else begin
+      if((lsu_pipe_i.instr_valid && lsu_pipe_i.lsu_en) && (id_ex_pipe_i.instr_valid && (id_ex_pipe_i.alu_en || id_ex_pipe_i.div_en || id_ex_pipe_i.mul_en || id_ex_pipe_i.sys_en || id_ex_pipe_i.xif_en))) begin
+        if(id_ex_pipe_i.instruction_id < lsu_pipe_i.instruction_id) begin
+          priority_o    <= 2'b10;
+        end else begin
+          priority_o    <= 2'b01;
+        end
+        end else if(id_ex_pipe_i.instr_valid && (!lsu_pipe_i.lsu_en)) begin
+          priority_o      <= 2'b10;
+        end else if(lsu_pipe_i.instr_valid && lsu_pipe_i.lsu_en) begin
+          priority_o      <= 2'b01;
+        end else begin
+          priority_o      <= 2'b00;
+        end
+    end
+  end
   ///////////////////////////////////////
   // EX/WB Pipeline Register           //
   ///////////////////////////////////////
@@ -327,6 +372,7 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
     if (rst_n == 1'b0)
     begin
       ex_wb_pipe_o.instr_valid        <= 1'b0;
+      ex_wb_pipe_o.instruction_id     <= 4'b0;
       ex_wb_pipe_o.rf_we              <= 1'b0;
       ex_wb_pipe_o.rf_waddr           <= '0;
       ex_wb_pipe_o.rf_wdata           <= 32'b0;
@@ -352,7 +398,7 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
 
       ex_wb_pipe_o.trigger_match      <= 1'b0;
 
-      ex_wb_pipe_o.lsu_en             <= 1'b0;
+      //ex_wb_pipe_o.lsu_en             <= 1'b0;
       ex_wb_pipe_o.csr_en             <= 1'b0;
       ex_wb_pipe_o.csr_op             <= CSR_OP_READ;
       ex_wb_pipe_o.csr_addr           <= 12'h000;
@@ -369,21 +415,20 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
     else
     begin
       if (ex_valid_o && wb_ready_i) begin
-        ex_wb_pipe_o.instr_valid <= 1'b1;
-        ex_wb_pipe_o.priv_lvl    <= id_ex_pipe_i.priv_lvl;
-        ex_wb_pipe_o.last_op     <= last_op_o;
-        ex_wb_pipe_o.first_op    <= first_op_o;
-        ex_wb_pipe_o.abort_op    <= id_ex_pipe_i.abort_op; // MPU exceptions and watchpoint triggers have WB timing and will not impact ex_wb_pipe.abort_op
+        ex_wb_pipe_o.instr_valid    <= 1'b1;
+        ex_wb_pipe_o.instruction_id <= id_ex_pipe_i.instruction_id;
+        ex_wb_pipe_o.priv_lvl       <= id_ex_pipe_i.priv_lvl;
+        ex_wb_pipe_o.last_op        <= last_op_o;
+        ex_wb_pipe_o.first_op       <= first_op_o;
+        ex_wb_pipe_o.abort_op       <= id_ex_pipe_i.abort_op; // MPU exceptions and watchpoint triggers have WB timing and will not impact ex_wb_pipe.abort_op
         // Deassert rf_we in case of illegal csr instruction or when the first half of a misaligned/split LSU goes to WB.
         // Also deassert if CSR was accepted both by eXtension if and pipeline
-        ex_wb_pipe_o.rf_we       <= (csr_is_illegal || lsu_split_i) ? 1'b0 : id_ex_pipe_i.rf_we;
-        ex_wb_pipe_o.lsu_en      <= id_ex_pipe_i.lsu_en;
+        ex_wb_pipe_o.rf_we          <= csr_is_illegal ? 1'b0 : id_ex_pipe_i.rf_we;
+        //ex_wb_pipe_o.lsu_en      <= id_ex_pipe_i.lsu_en;
 
         if (id_ex_pipe_i.rf_we) begin
           ex_wb_pipe_o.rf_waddr <= id_ex_pipe_i.rf_waddr;
-          if (!id_ex_pipe_i.lsu_en) begin
-            ex_wb_pipe_o.rf_wdata <= rf_wdata_o;
-          end
+          ex_wb_pipe_o.rf_wdata <= rf_wdata_o;
         end
 
         ex_wb_pipe_o.alu_jmp_qual       <= id_ex_pipe_i.alu_jmp && id_ex_pipe_i.alu_en;
@@ -435,56 +480,6 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
     end
   end
 
-    // Register for scoreboard entry 
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (rst_n == 1'b0) begin
-      scoreboard_entries_o.pc            <= 32'b0;
-      scoreboard_entries_o.instr_id      <= 5'b0;
-
-      //scoreboard_entries_o.operand1      <= 32'b0;
-      //scoreboard_entries_o.operand2      <= 32'b0;
-      //scoreboard_entries_o.imm           <= 32'b0;
-
-      scoreboard_entries_o.LSU_busy      <= 1'b0;
-      scoreboard_entries_o.other_FU_busy <= 1'b0;
-      scoreboard_entries_o.opcode        <= 7'b0;
-      scoreboard_entries_o.rd            <= 5'b0;
-      scoreboard_entries_o.rs1           <= 5'b0;
-      scoreboard_entries_o.rs2           <= 5'b0; 
-      //scoreboard_entries_o.result        <= 32'b0; 
-
-      scoreboard_entries_o.valid         <= 1'b0;
-      scoreboard_entries_o.exception     <= 1'b0;
-      //scoreboard_entries_o.cause       <= 10'b0;
-    end else begin
-      scoreboard_entries_o.pc       <= 32'b0;
-      scoreboard_entries_o.instr_id <= 5'b0;
-
-      //scoreboard_entries_o.operand1 <= operand_a;
-      //scoreboard_entries_o.operand2 <= operand_b;
-      scoreboard_entries_o.LSU_busy   <= 1'b0;    // Checking if LSU is busy
-
-      // Checking if other functional units are busy
-      if(ex_ready_o) begin
-        scoreboard_entries_o.other_FU_busy <= 1'b1;
-      end else begin
-        scoreboard_entries_o.other_FU_busy <= 1'b0;
-      end
-
-      scoreboard_entries_o.valid          <= 1'b0;
-      scoreboard_entries_o.exception      <= 1'b0;
-      scoreboard_entries_o.valid_other_fu <= 1'b0;
-      scoreboard_entries_o.valid_ex       <= 1'b0;
-      scoreboard_entries_o.valid_wb       <= 1'b0;
-      
-      scoreboard_entries_o.opcode         <= 7'b0;
-      scoreboard_entries_o.rd             <= 5'b0;
-      scoreboard_entries_o.rs1            <= 5'b0;
-      scoreboard_entries_o.rs2            <= 5'b0; 
-
-    end
-  end
-
   // LSU inputs are valid when LSU is enabled; LSU outputs need to remain valid until downstream stage is ready
   // If a trigger matches LSU address, this valid will be gated off inside the load_store_unit to prevent the instruction
   // from accessing the bus.
@@ -493,21 +488,24 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
 
   // ALU is single-cycle and output is therefore immediately valid (no handshake to optimize timing)
   assign alu_valid = 1'b1;
-  assign alu_ready = wb_ready_i;
+  //assign alu_ready = wb_ready_i;
+  assign alu_ready = !id_ex_pipe_i.alu_en || wb_ready_i;
 
   // CSR is single-cycle and output is therefore immediately valid (no handshake to optimize timing)
   assign csr_valid = 1'b1;
-  assign csr_ready = wb_ready_i;
+  //assign csr_ready = wb_ready_i;
+  assign csr_ready = !id_ex_pipe_i.csr_en || wb_ready_i;
 
   // SYS instructions (ebreak, wfi, etc.) are single-cycle (and have no result output) (no handshake to optimize timing)
   assign sys_valid = 1'b1;
-  assign sys_ready = wb_ready_i;
+  //assign sys_ready = wb_ready_i;
+  assign sys_ready = !id_ex_pipe_i.sys_en || wb_ready_i;
 
   // EX stage is ready immediately when killed and otherwise when its functional units are ready,
   // unless the stage is being halted. The late (data_rvalid_i based) downstream wb_ready_i signal
   // fans into the ready signals of all functional units.
-
-  assign ex_ready_o = ctrl_fsm_i.kill_ex || (alu_ready && csr_ready && sys_ready && mul_ready && div_ready && lsu_ready_i && xif_ready && !ctrl_fsm_i.halt_ex);
+  // removed lsu_ready_i from the ex_ready signal
+  assign ex_ready_o = ctrl_fsm_i.kill_ex || (alu_ready && csr_ready && sys_ready && mul_ready && div_ready && xif_ready && !ctrl_fsm_i.halt_ex);
 
   // TODO:ab Reconsider setting alu_en for exception/trigger instead of using 'previous_exception'
   assign ex_valid_o = ((id_ex_pipe_i.alu_en && alu_valid)       ||
@@ -515,7 +513,7 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
                        (id_ex_pipe_i.sys_en && sys_valid)       ||
                        (id_ex_pipe_i.mul_en && mul_valid)       ||
                        (id_ex_pipe_i.div_en && div_valid)       ||
-                       (id_ex_pipe_i.lsu_en && lsu_valid_i)     ||
+                       //(lsu_pipe_i.lsu_en && lsu_valid_i)       ||
                        (id_ex_pipe_i.xif_en && xif_valid)       ||
                        (id_ex_pipe_i.instr_meta.clic_ptr)       || // todo: Should this instead have it's own _valid?
                        (id_ex_pipe_i.instr_meta.mret_ptr)       || // todo: Should this instead have it's own _valid?
@@ -529,7 +527,8 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
   // XIF is modeled as a functional unit that occupies EX for a single cycle no matter whether the
   // result handshake is received in a single cycle or not.
   assign xif_valid = 1'b1;
-  assign xif_ready = wb_ready_i;
+  //assign xif_ready = wb_ready_i;
+  assign xif_ready = !id_ex_pipe_i.xif_en || wb_ready_i;
 
   // TODO: The EX stage needs to be ready to receive a result from a single cycle offloaded
   // instruction. In such case the result can be written into ex_wb_pipe_i.rf_wdata (as if the XIF

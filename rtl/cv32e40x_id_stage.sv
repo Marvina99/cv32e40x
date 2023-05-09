@@ -54,14 +54,14 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
   // ID/EX pipeline
   output id_ex_pipe_t id_ex_pipe_o,
 
-  // LSU pipeline
+  // ID/LSU pipeline 
   output lsu_pipe_t   lsu_pipe_o,
 
   // EX/WB pipeline
   input  ex_wb_pipe_t ex_wb_pipe_i,
 
-  // Scoreboard entry
-  output scoreboard_entries_t scoreboard_entries_o,
+  // LSU/WB pipeline 
+  input  lsu_wb_pipe_t lsu_wb_pipe_i,
 
   // Controller
   input  ctrl_byp_t   ctrl_byp_i,
@@ -102,6 +102,7 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
   output logic        id_ready_o,     // ID stage is ready for new data
   output logic        id_valid_o,     // ID stage has valid (non-bubble) data for next stage
   input  logic        ex_ready_i,     // EX stage is ready for new data
+  input  logic        lsu_ready_i,    // LSU stage is ready for new data
 
   // eXtension interface
   if_xif.cpu_issue    xif_issue_if,
@@ -223,6 +224,20 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
   // Current index for JVT instructions
   logic [7:0]           jvt_index;
 
+  // Instruction ID counter 
+  logic [3:0] ID_counter;
+
+    // Incrementing the ID counter every time an instruction is moved to the next stage 
+  always @(posedge clk, negedge rst_n) begin
+    if(rst_n == 0) begin
+      ID_counter <= 4'b0;
+    end else begin
+      if(id_valid_o && (ex_ready_i || lsu_ready_i)) begin
+        ID_counter <= ID_counter + 1;
+      end 
+    end
+  end
+
   assign instr_valid = if_id_pipe_i.instr_valid && !ctrl_fsm_i.kill_id && !ctrl_fsm_i.halt_id;
 
   assign sys_mret_insn_o = sys_mret_insn;
@@ -281,31 +296,6 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
 
   // Detect first half of table jumps
   assign tbljmp_first = if_id_pipe_i.instr_meta.tbljmp ? !if_id_pipe_i.last_op : 1'b0;
-
-
-  // Initalize scoreboard_entry
-
-  // initial begin
-  //   scoreboard_entries_o.pc            = 32'b0;
-  //   scoreboard_entries_o.instr_id      = 5'b0;
-
-  //   scoreboard_entries_o.operand1      = 32'b0;
-  //   scoreboard_entries_o.operand2      = 32'b0;
-  //   scoreboard_entries_o.imm           = 32'b0;
-
-  //   scoreboard_entries_o.LSU_busy      = 1'b0;
-  //   scoreboard_entries_o.other_FU_busy = 1'b0;
-  //   scoreboard_entries_o.opcode        = 7'b0;
-  //   scoreboard_entries_o.rd            = 5'b0;
-  //   scoreboard_entries_o.rs1           = 5'b0;
-  //   scoreboard_entries_o.rs2           = 5'b0; 
-  //   scoreboard_entries_o.result        = 32'b0; 
-
-  //   scoreboard_entries_o.valid         = 1'b0;
-  //   scoreboard_entries_o.exception     = 1'b0;
-  //   //scoreboard_entries_o.cause         = 10'b0;
-
-  // end
 
   //////////////////////////////////////////////////////////////////
   //      _                         _____                    _    //
@@ -538,15 +528,16 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
   assign rf_we          = rf_we_dec || xif_we;
 
 
-
-  // LSU PIPELINE
+    // LSU PIPELINE
 
   always_ff @(posedge clk, negedge rst_n)
   begin : LSU_PIPE_REGISTERS
     if (rst_n == 1'b0)
     begin
 
-      lsu_pipe_o.instr_valid          <= 1'b0;
+      lsu_pipe_o.instr_valid            <= 1'b0;
+
+      lsu_pipe_o.instruction_id         <= 4'b0;
 
       lsu_pipe_o.alu_operand_a          <= 32'b0; // todo: path from data_rdata_i through WB to id_ex_pipe_o_reg_alu_operand_a seems longer than needed (too many gates in ID)
       lsu_pipe_o.alu_operand_b          <= 32'b0;
@@ -559,16 +550,25 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
       lsu_pipe_o.lsu_sext               <= 1'b0;
       lsu_pipe_o.lsu_atop               <= 6'b0;
 
+      lsu_pipe_o.rf_we                  <= 1'b0;
+      lsu_pipe_o.rf_waddr               <= '0;
 
+      lsu_pipe_o.first_op               <= 1'b0;
+      lsu_pipe_o.last_op                <= 1'b0;
+      lsu_pipe_o.abort_op               <= 1'b0;
 
         // Exceptions and debug
       lsu_pipe_o.instr_meta             <= '0;
 
     end else begin
 
-      if (id_valid_o && ex_ready_i) begin
+      if (id_valid_o && lsu_ready_i) begin
         lsu_pipe_o.instr_valid            <= 1'b1;
+        lsu_pipe_o.first_op               <= first_op_o;
+        lsu_pipe_o.last_op                <= last_op_o;
+        lsu_pipe_o.abort_op               <= abort_op_o;
 
+        lsu_pipe_o.instruction_id <= ID_counter;
         // Operands
         if (alu_op_a_mux_sel != OP_A_NONE) begin
           lsu_pipe_o.alu_operand_a        <= operand_a;               // Used by most ALU, CSR and LSU instructions
@@ -589,13 +589,19 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
           lsu_pipe_o.lsu_sext             <= lsu_sext;
           lsu_pipe_o.lsu_atop             <= lsu_atop;
         end
+        
+        lsu_pipe_o.rf_we                  <= rf_we;
+        if (rf_we) begin
+          lsu_pipe_o.rf_waddr             <= rf_waddr;
+        end
 
-        lsu_pipe_o.instr_meta <= if_id_pipe_i.instr_meta;
-        end else if (ex_ready_i) begin
-          lsu_pipe_o.instr_valid            <= 1'b0;
+        lsu_pipe_o.instr_meta             <= if_id_pipe_i.instr_meta;
+        end else if (lsu_ready_i) begin
+          lsu_pipe_o.instr_valid          <= 1'b0;
       end
     end 
   end
+
 
 
   /////////////////////////////////////////////////////////////////////////////////
@@ -612,6 +618,7 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
     if (rst_n == 1'b0)
     begin
       id_ex_pipe_o.instr_valid            <= 1'b0;
+      id_ex_pipe_o.instruction_id         <= 4'b0;
       id_ex_pipe_o.alu_en                 <= 1'b0;
       id_ex_pipe_o.alu_bch                <= 1'b0;
       id_ex_pipe_o.alu_jmp                <= 1'b0;
@@ -634,11 +641,11 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
       id_ex_pipe_o.csr_en                 <= 1'b0;
       id_ex_pipe_o.csr_op                 <= CSR_OP_READ;
 
-      id_ex_pipe_o.lsu_en                 <= 1'b0;
-      id_ex_pipe_o.lsu_we                 <= 1'b0;
-      id_ex_pipe_o.lsu_size               <= 2'b0;
-      id_ex_pipe_o.lsu_sext               <= 1'b0;
-      id_ex_pipe_o.lsu_atop               <= 6'b0;
+      // id_ex_pipe_o.lsu_en                 <= 1'b0;
+      // id_ex_pipe_o.lsu_we                 <= 1'b0;
+      // id_ex_pipe_o.lsu_size               <= 2'b0;
+      // id_ex_pipe_o.lsu_sext               <= 1'b0;
+      // id_ex_pipe_o.lsu_atop               <= 6'b0;
 
       id_ex_pipe_o.sys_en                <= 1'b0;
       id_ex_pipe_o.sys_dret_insn         <= 1'b0;
@@ -676,7 +683,8 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
         id_ex_pipe_o.last_op      <= last_op_o;
         id_ex_pipe_o.first_op     <= first_op_o;
         id_ex_pipe_o.abort_op     <= abort_op_o;
-
+      
+        id_ex_pipe_o.instruction_id <= ID_counter;
         // Operands
         if (alu_op_a_mux_sel != OP_A_NONE) begin
           id_ex_pipe_o.alu_operand_a        <= operand_a;               // Used by most ALU, CSR and LSU instructions
@@ -720,14 +728,13 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
           id_ex_pipe_o.csr_op               <= csr_op;
         end
 
-        // These signals are used by the LSU is therefore not needed in the ID/EX pipeline 
-        id_ex_pipe_o.lsu_en                 <= lsu_en;
-        if (lsu_en) begin
-          id_ex_pipe_o.lsu_we               <= lsu_we;
-          id_ex_pipe_o.lsu_size             <= lsu_size;
-          id_ex_pipe_o.lsu_sext             <= lsu_sext;
-          id_ex_pipe_o.lsu_atop             <= lsu_atop;
-        end
+        // id_ex_pipe_o.lsu_en                 <= lsu_en;
+        // if (lsu_en) begin
+        //   id_ex_pipe_o.lsu_we               <= lsu_we;
+        //   id_ex_pipe_o.lsu_size             <= lsu_size;
+        //   id_ex_pipe_o.lsu_sext             <= lsu_sext;
+        //   id_ex_pipe_o.lsu_atop             <= lsu_atop;
+        // end
 
         // Special instructions
         id_ex_pipe_o.sys_en                 <= sys_en;
@@ -778,59 +785,6 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
     end
   end
 
-  // Register for scoreboard entry 
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (rst_n == 1'b0) begin
-      scoreboard_entries_o.pc            <= 32'b0;
-      scoreboard_entries_o.instr_id      <= 5'b0;
-
-      //scoreboard_entries_o.operand1      <= 32'b0;
-      //scoreboard_entries_o.operand2      <= 32'b0;
-      //scoreboard_entries_o.imm           <= 32'b0;
-
-      scoreboard_entries_o.LSU_busy      <= 1'b0;
-      scoreboard_entries_o.other_FU_busy <= 1'b0;
-      scoreboard_entries_o.opcode        <= 7'b0;
-      scoreboard_entries_o.rd            <= 5'b0;
-      scoreboard_entries_o.rs1           <= 5'b0;
-      scoreboard_entries_o.rs2           <= 5'b0; 
-      //scoreboard_entries_o.result        <= 32'b0; 
-
-      scoreboard_entries_o.valid         <= 1'b0;
-      scoreboard_entries_o.exception     <= 1'b0;
-      //scoreboard_entries_o.cause       <= 10'b0;
-    end else begin
-      scoreboard_entries_o.pc       <= if_id_pipe_i.pc;
-      scoreboard_entries_o.instr_id <= 5'b0;
-
-      scoreboard_entries_o.LSU_busy      <= 1'b0;
-      scoreboard_entries_o.other_FU_busy <= 1'b0;
-
-      //scoreboard_entries_o.operand1 <= operand_a;
-      //scoreboard_entries_o.operand2 <= operand_b;
-      scoreboard_entries_o.lsu_en   <= lsu_en;    // Checking if LSU is busy
-
-      // Checking if other functional units are busy
-      if((alu_en || csr_en || mul_en || div_en) && !lsu_en) begin
-        scoreboard_entries_o.other_FU <= 1'b1;
-      end else begin
-        scoreboard_entries_o.other_FU <= 1'b0;
-      end
-      
-      scoreboard_entries_o.opcode        <= instr[6:0];
-      scoreboard_entries_o.rd            <= rf_waddr;
-      scoreboard_entries_o.rs1           <= instr[REG_S1_MSB:REG_S1_LSB]; // RF address of source 1
-      scoreboard_entries_o.rs2           <= instr[REG_S2_MSB:REG_S2_LSB]; // RF address of source 2
-
-      scoreboard_entries_o.valid          <= 1'b0;
-      scoreboard_entries_o.exception      <= 1'b0;
-      scoreboard_entries_o.valid_other_fu <= 1'b0;
-      scoreboard_entries_o.valid_ex       <= 1'b0;
-      scoreboard_entries_o.valid_wb       <= 1'b0;
-
-    end
-  end
-
   assign alu_jmp_o    = alu_jmp;
   assign alu_jmpr_o   = alu_jmpr;
 
@@ -851,7 +805,7 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
   // contains the instruction following the multicycle instruction.
   // todo: update when Zce is included. Currently, no multi cycle ID stalls are possible.
 
-  assign id_ready_o = ctrl_fsm_i.kill_id || (!multi_cycle_id_stall && ex_ready_i && !ctrl_fsm_i.halt_id && !xif_waiting);
+  assign id_ready_o = ctrl_fsm_i.kill_id || (!multi_cycle_id_stall && ((ex_ready_i && !lsu_en) || (lsu_en && lsu_ready_i)) && !ctrl_fsm_i.halt_id && !xif_waiting);
 
   // multi_cycle_id_stall is currently tied to 1'b0. Will be used for Zce push/pop instructions.
   assign id_valid_o = (instr_valid && !xif_waiting) || (multi_cycle_id_stall && !ctrl_fsm_i.kill_id && !ctrl_fsm_i.halt_id);

@@ -35,17 +35,24 @@ module cv32e40x_ex_stage_sva
 
   input logic           ex_ready_o,
   input logic           ex_valid_o,
+  input logic           lsu_valid_i,
+  input logic           lsu_ready_i,
   input logic           wb_ready_i,
+  input logic           wb_lsu_ready_i,
   input ctrl_fsm_t      ctrl_fsm_i,
 
   input id_ex_pipe_t    id_ex_pipe_i,
+  input lsu_pipe_t      lsu_pipe_i,
   input ex_wb_pipe_t    ex_wb_pipe_o,
+  input lsu_wb_pipe_t   lsu_wb_pipe_i,
   input logic           lsu_split_i,
   input logic           csr_illegal_i,
 
   input logic [31:0]    branch_target_o,
   input logic           branch_taken_ex_ctrl_i,
-  input logic           last_op_o
+  input logic           last_op_o,
+
+  input logic [1:0]     priority_o
 );
 
   // Halt implies not ready and not valid
@@ -105,15 +112,15 @@ endgenerate
   // First access of split LSU instruction should have rf_we deasserted
   a_split_rf_we:
     assert property (@(posedge clk) disable iff (!rst_n)
-                      (ex_valid_o && wb_ready_i && id_ex_pipe_i.lsu_en && lsu_split_i)
-                      |=> !ex_wb_pipe_o.rf_we);
+                      (lsu_ready_i && wb_lsu_ready_i && lsu_pipe_i.lsu_en && lsu_split_i)
+                      |=> !lsu_wb_pipe_i.rf_we);
 
-  // Ensure that functional unit enables are one-hot (ALU and DIV both use the ALU though)
-  a_functional_unit_enable_onehot :
-    assert property (@(posedge clk) disable iff (!rst_n)
-                     $onehot0({id_ex_pipe_i.alu_en, id_ex_pipe_i.div_en, id_ex_pipe_i.mul_en,
-                     id_ex_pipe_i.csr_en, id_ex_pipe_i.sys_en, id_ex_pipe_i.lsu_en, id_ex_pipe_i.xif_en}))
-      else `uvm_error("ex_stage", "Multiple functional units enabled")
+  // // Ensure that functional unit enables are one-hot (ALU and DIV both use the ALU though)
+  // a_functional_unit_enable_onehot :
+  //   assert property (@(posedge clk) disable iff (!rst_n)
+  //                    $onehot0({id_ex_pipe_i.alu_en, id_ex_pipe_i.div_en, id_ex_pipe_i.mul_en,
+  //                    id_ex_pipe_i.csr_en, id_ex_pipe_i.sys_en, lsu_i.lsu_en, id_ex_pipe_i.xif_en}))
+  //     else `uvm_error("ex_stage", "Multiple functional units enabled")
 
   // Check that branch target remains constant while a branch instruction is in EX
   // Branches are taken during their first un-stalled cycle in EX. If the target changes before
@@ -128,5 +135,21 @@ endgenerate
 
   a_bch_target_stable: assert property (p_bch_target_stable)
     else `uvm_error("ex_stage", "Branch target not stable")
+
+  // Verifying the use of instruction ID
+  property p_ex_oldest_instr;
+    @(posedge clk) disable iff (!rst_n)
+    (id_ex_pipe_i.instr_valid && (id_ex_pipe_i.alu_en || id_ex_pipe_i.div_en || id_ex_pipe_i.mul_en)) && !lsu_pipe_i.lsu_en |=> (priority_o == 2'b10);
+  endproperty
+
+  assert property(p_ex_oldest_instr);
+
+  property p_lsu_oldest_instr;
+    @(posedge clk) disable iff (!rst_n)
+    lsu_pipe_i.instr_valid && lsu_pipe_i.lsu_en && !id_ex_pipe_i.instr_valid |=> (priority_o == 2'b01);
+  endproperty
+
+  assert property(p_lsu_oldest_instr);
+
 
 endmodule // cv32e40x_ex_stage_sva

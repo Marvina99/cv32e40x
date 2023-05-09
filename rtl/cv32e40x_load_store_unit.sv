@@ -46,14 +46,14 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   // output to data memory
   if_c_obi.master     m_c_obi_data_if,
 
-  // LSU pipeline
-  input lsu_pipe_t    lsu_pipe_i,               
-
   // ID/EX pipeline
-  //input id_ex_pipe_t  id_ex_pipe_i,
+  input id_ex_pipe_t  id_ex_pipe_i,
 
-  // Scoreboard entry 
-  output scoreboard_entries_t scoreboard_entries_o,
+  // ID/LSU pipeline
+  input lsu_pipe_t    lsu_pipe_i,
+
+  // LSU/WB pipeline
+  output lsu_wb_pipe_t lsu_wb_pipe_o,
 
   // Control outputs
   output logic        busy_o,
@@ -83,11 +83,19 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   output logic        ready_0_o,                // LSU ready for new data in EX stage
   output logic        valid_0_o,
   input  logic        ready_0_i,
+  output logic        done_o,                   // first part of LSU instruction is done
+  
+  input  logic        wb_ready_i,               // WB stage is ready for new data
+  input  logic        ex_valid_i,               // EX stage has valid data for WB stage
+  input  logic        ex_ready_i,               // EX stage is ready for new data 
 
   input  logic        valid_1_i,                // Handshakes for second LSU stage (WB)
   output logic        ready_1_o,                // LSU ready for new data in WB stage
   output logic        valid_1_o,
   input  logic        ready_1_i,
+  
+  output logic        lsu_last_op_o,
+  output logic        lsu_first_op_o,
 
   // eXtension interface
   if_xif.cpu_mem        xif_mem_if,
@@ -95,6 +103,9 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
 );
 
   localparam DEPTH = 2;                         // Maximum number of outstanding transactions
+
+  // Instruction valid
+  logic instr_valid;
 
   // Transaction request (before aligner)
   trans_req_t     trans;
@@ -178,6 +189,9 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   logic [31:0]    rdata_q;
 
   logic           done_0;               // First stage (EX) is done
+  logic           ready_ex;             // Ready signal needed for the done signal
+  logic           valid_ex;
+  logic           lsu_valid;            // Ready data for second half(WB) of load instruction
 
   logic           trans_valid_q;        // trans_valid got clocked without trans_ready
 
@@ -188,7 +202,18 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   logic                  xif_res_q;     // The next memory result is for the XIF interface
   logic [X_ID_WIDTH-1:0] xif_id_q;      // Instruction ID of an XIF memory transaction
 
+  //logic                  program_order; // Flag for maintaining program order when commiting
+
+  logic                  valid;
+  logic                  ready;
+  data_resp_t            resp_data;
+
   assign xif_req = X_EXT && xif_mem_if.mem_valid;
+
+  assign instr_valid = lsu_pipe_i.instr_valid && !ctrl_fsm_i.kill_ex && !ctrl_fsm_i.halt_ex; // Might need to add halt and kill here in the future
+
+  assign ready_ex = wb_ready_i;
+  assign valid_ex = lsu_pipe_i.lsu_en && instr_valid; 
 
   // Transaction (before aligner)
   // Generate address from operands (atomic memory transactions do not use an address offset computation)
@@ -203,7 +228,6 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
     trans.atop  = lsu_pipe_i.lsu_atop;
     trans.sext  = lsu_pipe_i.lsu_sext;
   end
-
 
   // Set outputs for trigger module
   assign lsu_addr_o = wpt_trans.addr;
@@ -320,7 +344,7 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
     if (rst_n == 1'b0) begin
       split_q    <= 1'b0;
     end else begin
-      if(!valid_0_i && !xif_req) begin
+      if(!valid_ex && !xif_req) begin
         split_q <= 1'b0; // Reset split_st when no valid instructions
       end else if (ctrl_update) begin // EX done, update split_q for next address phase
         split_q <= lsu_split_0_o;
@@ -418,7 +442,7 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   begin
     lsu_split_0_o = 1'b0;
     misaligned_halfword = 1'b0;
-    if (valid_0_i && !xif_req && !split_q)
+    if (valid_ex && !xif_req && !split_q)
     begin
       case (trans.size)
         2'b10: // word
@@ -442,6 +466,11 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   // Only valid when id_ex_pipe.lsu_en == 1
   assign lsu_last_op_0_o  = !lsu_split_0_o;
   assign lsu_first_op_0_o = !split_q;
+
+
+  assign lsu_last_op_o  = lsu_pipe_i.lsu_en ? (!lsu_split_0_o && lsu_pipe_i.last_op) : lsu_pipe_i.last_op;
+  
+  assign lsu_first_op_o = lsu_pipe_i.lsu_en ? (!split_q && lsu_pipe_i.first_op) : lsu_pipe_i.first_op;
 
   // Busy if there are ongoing (or potentially outstanding) transfers
   // In the case of mpu errors, the LSU control logic can have outstanding transfers not seen by the response filter.
@@ -491,17 +520,17 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   // Transaction request generation
   // OBI compatible (avoids combinatorial path from data_rvalid_i to data_req_o). Multiple trans_* transactions can be
   // issued (and accepted) before a response (resp_*) is received.
-  assign trans_valid = (valid_0_i || xif_req) && (cnt_q < DEPTH);
+  assign trans_valid = (valid_ex || xif_req) && (cnt_q < DEPTH);
 
   // LSU second stage is ready if it is not being used (i.e. no outstanding transfers, cnt_q = 0),
   // or if it is being used and the awaited response arrives (resp_rvalid).
   // XIF transactions bypass the pipeline, hence ready_1_i is not required for the second stage to
   // be ready for XIF transactions.
-  assign ready_1_o   = ((cnt_q == 2'b00) ? 1'b1 : resp_valid) && ready_1_i;
+  assign ready_1_o   = ((cnt_q == 2'b00) ? 1'b1 : resp_valid);
   assign xif_ready_1 = ((cnt_q == 2'b00) ? 1'b1 : resp_valid);
 
   // LSU second stage is valid when resp_valid (typically data_rvalid_i) is received. Both parts of a misaligned transfer will signal valid_1_o.
-  assign valid_1_o                          = resp_valid && valid_1_i && !xif_res_q;
+  assign valid_1_o                          = resp_valid && !xif_res_q;
   assign xif_mem_result_if.mem_result_valid = last_q && resp_valid && xif_res_q; // todo: last_q or not?
 
   // LSU EX stage readyness requires two criteria to be met:
@@ -519,11 +548,11 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   // Indicates that address phase in EX is complete.
   // XIF request bypasses pipeline, ignores ready_0_i but requires xif_ready_1 instead.
   assign done_0    = (
-                      !(valid_0_i || xif_req) ? 1'b1 :
+                      !(valid_ex || xif_req) ? 1'b1 :
                       (cnt_q == 2'b00)        ? (trans_valid && trans_ready) :
                       (cnt_q == 2'b01)        ? (trans_valid && trans_ready) :
                       1'b1
-                     ) && (ready_0_i || (xif_req && xif_ready_1));
+                     ) && (ready_1_i || (xif_req && xif_ready_1));
 
   // XIF request bypasses pipeline (does not assert valid_0_o) and takes precedence over regular
   // requests, hence inhibits a concurrent request from EX stage
@@ -531,8 +560,9 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
                        (cnt_q == 2'b00) ? (trans_valid && trans_ready) :
                        (cnt_q == 2'b01) ? (trans_valid && trans_ready) :
                        1'b1
-                      ) && valid_0_i && !xif_req;
+  ) && valid_ex && !xif_req;
 
+  //assign lsu_valid = (valid_0_o && valid_ex) && instr_valid;
 
   // External (EX) ready only when not handling multi cycle split accesses
   // otherwise we may let a new instruction into EX, overwriting second phase of split access..
@@ -551,7 +581,7 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   assign lsu_mpu_status_1_o = resp.mpu_status;
 
   // Update signals for EX/WB registers (when EX has valid data itself and is ready for next)
-  assign ctrl_update = done_0 && (valid_0_i || xif_req);
+  assign ctrl_update = (done_0 && (valid_ex || xif_req));
 
 
   //////////////////////////////////////////////////////////////////////////////
@@ -649,6 +679,28 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   assign lsu_err_1_o = xif_res_q ? '0 : filter_err;
 
   //////////////////////////////////////////////////////////////////////////////
+  // Skid buffer
+  //////////////////////////////////////////////////////////////////////////////
+
+  cv32e40x_skid_buffer
+  #(
+    .DWIDTH (32)
+  )
+  skid_buffer_i
+  (
+    .clk                  ( clk                    ),
+    .rst_n                ( rst_n                  ),
+
+    .i_data               ( wpt_resp               ),
+    .i_valid              ( wpt_resp_valid         ),
+    .o_ready              ( ready                  ),
+
+    .o_data               ( resp_data              ),
+    .o_valid              ( valid                  ),
+    .i_ready              ( ready_1_i              )
+  );
+
+  //////////////////////////////////////////////////////////////////////////////
   // WPT
   //////////////////////////////////////////////////////////////////////////////
 
@@ -697,9 +749,11 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
       // Extract rdata from response struct
       assign wpt_resp_rdata = wpt_resp.bus_resp.rdata;
 
-      assign resp_valid = wpt_resp_valid;
-      assign resp_rdata = wpt_resp_rdata;
-      assign resp       = wpt_resp;
+      // assign resp_valid = valid;
+      // assign resp_rdata = resp_data;
+      assign resp_valid = valid;
+      assign resp_rdata = resp_data.bus_resp.rdata;
+      assign resp       = resp_data;
 
       assign lsu_wpt_match_1_o = resp.wpt_match;
 
@@ -711,16 +765,19 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
       assign mpu_trans_pushpop = wpt_trans_pushpop;
       assign wpt_trans_ready   = mpu_trans_ready;
       assign wpt_resp_valid    = mpu_resp_valid;
+      assign valid             = mpu_resp_valid;
       assign wpt_resp          = mpu_resp;
       assign xif_wpt_match     = 1'b0;
 
       assign wpt_resp_rdata = wpt_resp.bus_resp.rdata;
 
-      assign resp_valid = wpt_resp_valid;
-      assign resp_rdata = wpt_resp_rdata;
-      assign resp       = wpt_resp;
+      assign resp_valid = valid;
+      assign resp_rdata = resp_data.bus_resp.rdata;
+      assign resp       = bus_resp;
     end
   endgenerate
+
+
   //////////////////////////////////////////////////////////////////////////////
   // MPU
   //////////////////////////////////////////////////////////////////////////////
@@ -830,6 +887,79 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
 
     .m_c_obi_data_if    ( m_c_obi_data_if )
   );
+  
+
+  // always @(posedge clk, negedge rst_n) begin
+  //   if(rst_n == 1'b0) begin
+  //     program_order_o <= 1'b0;
+  //   end else begin
+  //     if(((lsu_pipe_i.instruction_id < id_ex_pipe_i.instruction_id) && lsu_pipe_i.instruction_id != 1'b0) || id_ex_pipe_i.instruction_id == 1'b0) begin
+  //       program_order_o <= 1'b1;
+  //     end else begin
+  //       program_order_o <= 1'b0;
+  //     end
+  //   end  
+  // end
+
+  //////////////////////////////////////////////////////////////////////////////
+  // LSU/WB pipeline register
+  //////////////////////////////////////////////////////////////////////////////
+  always_ff @(posedge clk, negedge rst_n)
+    begin : LSU_WB_PIPE_REGISTERS
+      if (rst_n == 1'b0) 
+      begin
+        lsu_wb_pipe_o.instr_valid     <= '0;
+        lsu_wb_pipe_o.instruction_id  <= 4'b0;  
+      
+        // lsu_wb_pipe_o.operand_a   <= 1'b0;
+        // lsu_wb_pipe_o.operand_b   <= 1'b0;
+        // lsu_wb_pipe_o.operand_c   <= 1'b0;
+
+        lsu_wb_pipe_o.lsu_en      <= 1'b0;
+        lsu_wb_pipe_o.lsu_we      <= 1'b0;
+        lsu_wb_pipe_o.lsu_size    <= 1'b0;
+        lsu_wb_pipe_o.lsu_sext    <= 1'b0;
+        lsu_wb_pipe_o.lsu_atop    <= 1'b0;
+
+        lsu_wb_pipe_o.rf_we       <= 1'b0;
+        lsu_wb_pipe_o.rf_waddr    <= 1'b0;
+
+        lsu_wb_pipe_o.first_op     <= 1'b0;
+        lsu_wb_pipe_o.last_op      <= 1'b0;
+
+        lsu_wb_pipe_o.instr_meta  <= 1'b0;
+      end else 
+      begin
+        //lsu_wb_pipe_o.lsu_en <= 1'b0;
+        if ((ready_1_o && ready_0_o)) begin
+          lsu_wb_pipe_o.instr_valid     <= instr_valid;
+          lsu_wb_pipe_o.instruction_id  <= lsu_pipe_i.instruction_id;
+
+          // lsu_wb_pipe_o.operand_a   <= 1'b0;
+          // lsu_wb_pipe_o.operand_b   <= 1'b0;
+          // lsu_wb_pipe_o.operand_c   <= 1'b0;
+
+          lsu_wb_pipe_o.lsu_en      <= lsu_pipe_i.lsu_en;
+          lsu_wb_pipe_o.lsu_we      <= lsu_pipe_i.lsu_we;
+          lsu_wb_pipe_o.lsu_size    <= lsu_pipe_i.lsu_size;
+          lsu_wb_pipe_o.lsu_sext    <= lsu_pipe_i.lsu_sext;
+          lsu_wb_pipe_o.lsu_atop    <= lsu_pipe_i.lsu_atop;
+
+          lsu_wb_pipe_o.rf_we       <= lsu_split_0_o ? 1'b0 : lsu_pipe_i.rf_we;
+
+          if (lsu_pipe_i.rf_we) begin
+            lsu_wb_pipe_o.rf_waddr    <= lsu_pipe_i.rf_waddr;
+          end
+
+          lsu_wb_pipe_o.last_op     <= lsu_last_op_o;
+          lsu_wb_pipe_o.first_op    <= lsu_first_op_o;
+
+          lsu_wb_pipe_o.instr_meta  <= lsu_pipe_i.instr_meta;
+        end else if (ready_1_o) begin // instr_valid == 0
+          lsu_wb_pipe_o.instr_valid <= 1'b0;
+        end
+      end
+    end
 
   //////////////////////////////////////////////////////////////////////////////
   // XIF interface response and result data
@@ -859,68 +989,5 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
       assign xif_mem_result_if.mem_result.dbg   = '0;
     end
   endgenerate
-
-   // Register for scoreboard entry 
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (rst_n == 1'b0) begin
-      scoreboard_entries_o.pc            <= 32'b0;
-      scoreboard_entries_o.instr_id      <= 5'b0;
-
-      //scoreboard_entries_o.operand1      <= 32'b0;
-      //scoreboard_entries_o.operand2      <= 32'b0;
-      //scoreboard_entries_o.imm           <= 32'b0;
-
-      scoreboard_entries_o.LSU_busy      <= 1'b0;
-      scoreboard_entries_o.other_FU_busy <= 1'b0;
-      scoreboard_entries_o.opcode        <= 7'b0;
-      scoreboard_entries_o.rd            <= 5'b0;
-      scoreboard_entries_o.rs1           <= 5'b0;
-      scoreboard_entries_o.rs2           <= 5'b0; 
-      //scoreboard_entries_o.result        <= 32'b0; 
-
-      scoreboard_entries_o.valid         <= 1'b0;
-      scoreboard_entries_o.valid_ex      <= 1'b0;
-      scoreboard_entries_o.valid_wb      <= 1'b0;
-      scoreboard_entries_o.exception     <= 1'b0;
-      //scoreboard_entries_o.cause       <= 10'b0;
-    end else begin
-      scoreboard_entries_o.pc       <= 1'b0;
-      scoreboard_entries_o.instr_id <= 5'b0;
-
-      scoreboard_entries_o.LSU_busy      <= 1'b0;
-      scoreboard_entries_o.other_FU_busy <= 1'b0;
-
-      //scoreboard_entries_o.operand1 <= operand_a;
-      //scoreboard_entries_o.operand2 <= operand_b;
-      scoreboard_entries_o.lsu_en   <= 1'b0;    // Checking if LSU is busy
-
-      // Checking if other functional units are busy
-      if(valid_0_o) begin
-        scoreboard_entries_o.valid_ex <= 1'b1;
-      end else begin
-        scoreboard_entries_o.valid_ex <= 1'b0;
-      end
-
-      if(valid_1_i) begin
-        scoreboard_entries_o.valid_wb <= 1'b1;
-      end else begin
-        scoreboard_entries_o.valid_wb <= 1'b0;
-      end
-
-      if(!ready_0_o) begin
-        scoreboard_entries_o.LSU_busy <= 1'b1;
-      end else begin
-        scoreboard_entries_o.LSU_busy <= 1'b0;
-      end
-      scoreboard_entries_o.opcode        <= 1'b0;
-      scoreboard_entries_o.rd            <= 1'b0;
-      scoreboard_entries_o.rs1           <= 1'b0;
-      scoreboard_entries_o.rs2           <= 1'b0;
-
-      scoreboard_entries_o.valid          <= 1'b0;
-      scoreboard_entries_o.exception      <= 1'b0;
-      scoreboard_entries_o.valid_other_fu <= 1'b0;
-    end
-  end
 
 endmodule

@@ -35,6 +35,8 @@ module cv32e40x_cs_registers_sva
    input ctrl_fsm_t   ctrl_fsm_i,
    input ctrl_state_e ctrl_fsm_cs,
    input id_ex_pipe_t id_ex_pipe_i,
+   input lsu_pipe_t   lsu_pipe_i,
+   input lsu_wb_pipe_t lsu_wb_pipe_i,
    input ex_wb_pipe_t ex_wb_pipe_i,
    input logic [31:0] csr_rdata_o,
    input logic        csr_we_int,
@@ -97,7 +99,7 @@ module cv32e40x_cs_registers_sva
     // is done in WB.
     property p_no_mnxti_after_lsu;
       @(posedge clk) disable iff (!rst_n)
-      (  wb_valid_i && ex_wb_pipe_i.lsu_en && ex_wb_pipe_i.instr_valid
+      (  wb_valid_i && lsu_wb_pipe_i.lsu_en && lsu_wb_pipe_i.instr_valid
         |=>
         !clic_pa_valid_o);
     endproperty;

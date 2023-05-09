@@ -167,23 +167,14 @@ module cv32e40x_core import cv32e40x_pkg::*;
   // ID/EX pipeline
   id_ex_pipe_t id_ex_pipe;
 
-  // LSU pipeline
+  // ID/LSU pipeline 
   lsu_pipe_t   lsu_pipe;
 
   // EX/WB pipeline
   ex_wb_pipe_t ex_wb_pipe;
-  
-  // Scoreboard entry from ID stage
-  scoreboard_entries_t scoreboard_entries_id;
 
-  // Scoreboard entry from LSU
-  scoreboard_entries_t scoreboard_entries_lsu;
-
-  // Scoreboard entry from EX stage
-  scoreboard_entries_t scoreboard_entries_ex;
-
-  // Scoreboard entry from WB stage
-  scoreboard_entries_t scoreboard_entries_wb;
+  // LSU/WB pipeline
+  lsu_wb_pipe_t lsu_wb_pipe;
 
   // IF/ID pipeline
   if_id_pipe_t if_id_pipe;
@@ -204,6 +195,7 @@ module cv32e40x_core import cv32e40x_pkg::*;
   logic        last_op_if;
   logic        last_op_id;
   logic        last_op_ex;
+  logic        lsu_last_op;
   logic        last_op_wb;
 
   // Abort_op bits
@@ -270,11 +262,16 @@ module cv32e40x_core import cv32e40x_pkg::*;
   logic        lsu_ready_ex;
   logic        lsu_valid_ex;
   logic        lsu_ready_0;
+  logic        done;
 
   logic        lsu_valid_1;             // Handshake with WB
   logic        lsu_ready_wb;
   logic        lsu_valid_wb;
   logic        lsu_ready_1;
+
+  //check program_order
+  logic        lsu_program_order;
+  logic [1:0]  ex_program_order;
 
   // LSU signals to trigger module
   logic [31:0] lsu_addr_ex;
@@ -532,17 +529,16 @@ module cv32e40x_core import cv32e40x_pkg::*;
     // IF/ID pipeline
     .if_id_pipe_i                 ( if_id_pipe                ),
 
-    // LSU pipeline
-    .lsu_pipe_o                   ( lsu_pipe                  ),
-
     // ID/EX pipeline
     .id_ex_pipe_o                 ( id_ex_pipe                ),
+
+    .lsu_pipe_o                   ( lsu_pipe                  ),
 
     // EX/WB pipeline
     .ex_wb_pipe_i                 ( ex_wb_pipe                ),
 
-    // Scoreboard entry in ID stage  
-    .scoreboard_entries_o         ( scoreboard_entries_id     ), 
+    // LSU/WB pipeline            
+    .lsu_wb_pipe_i                ( lsu_wb_pipe               ),
 
     // Controller
     .ctrl_byp_i                   ( ctrl_byp                  ),
@@ -575,6 +571,7 @@ module cv32e40x_core import cv32e40x_pkg::*;
     .id_ready_o                   ( id_ready                  ),
     .id_valid_o                   ( id_valid                  ),
     .ex_ready_i                   ( ex_ready                  ),
+    .lsu_ready_i                  ( lsu_ready_0               ),
 
     // eXtension interface
     .xif_issue_if                 ( xif_issue_if              ),
@@ -604,11 +601,13 @@ module cv32e40x_core import cv32e40x_pkg::*;
     // ID/EX pipeline
     .id_ex_pipe_i               ( id_ex_pipe                   ),
 
+    .lsu_pipe_i                 ( lsu_pipe                     ),
+
     // EX/WB pipeline
     .ex_wb_pipe_o               ( ex_wb_pipe                   ),
-
-    // Scoreboard entry in EX stage
-    .scoreboard_entries_o       ( scoreboard_entries_ex        ),
+    
+    // LSU/WB pipeline 
+    .lsu_wb_pipe_i              ( lsu_wb_pipe                  ),
 
     // From controller FSM
     .ctrl_fsm_i                 ( ctrl_fsm                     ),
@@ -633,15 +632,16 @@ module cv32e40x_core import cv32e40x_pkg::*;
     .lsu_valid_o                ( lsu_valid_ex                 ),
     .lsu_ready_i                ( lsu_ready_0                  ),
     .lsu_split_i                ( lsu_split_ex                 ),
-    .lsu_last_op_i              ( lsu_last_op_ex               ),
-    .lsu_first_op_i             ( lsu_first_op_ex              ),
 
     // Pipeline handshakes
     .ex_ready_o                 ( ex_ready                     ),
     .ex_valid_o                 ( ex_valid                     ),
     .wb_ready_i                 ( wb_ready                     ),
+    .wb_lsu_ready_i             ( lsu_ready_wb                 ),
     .last_op_o                  ( last_op_ex                   ),
-    .first_op_o                 ( first_op_ex                  )
+    .first_op_o                 ( first_op_ex                  ),
+
+    .priority_o                 ( ex_program_order             )
   );
 
   ////////////////////////////////////////////////////////////////////////////////////////
@@ -655,76 +655,83 @@ module cv32e40x_core import cv32e40x_pkg::*;
 
   cv32e40x_load_store_unit
   #(
-    .A_EXT                 (A_EXT                   ),
-    .X_EXT                 (X_EXT                   ),
-    .X_ID_WIDTH            (X_ID_WIDTH              ),
-    .PMA_NUM_REGIONS       (PMA_NUM_REGIONS         ),
-    .PMA_CFG               (PMA_CFG                 ),
-    .DBG_NUM_TRIGGERS      (DBG_NUM_TRIGGERS        ),
-    .DM_REGION_START       (DM_REGION_START         ),
-    .DM_REGION_END         (DM_REGION_END           )
+    .A_EXT                 (A_EXT               ),
+    .X_EXT                 (X_EXT               ),
+    .X_ID_WIDTH            (X_ID_WIDTH          ),
+    .PMA_NUM_REGIONS       (PMA_NUM_REGIONS     ),
+    .PMA_CFG               (PMA_CFG             ),
+    .DBG_NUM_TRIGGERS      (DBG_NUM_TRIGGERS    ),
+    .DM_REGION_START       (DM_REGION_START     ),
+    .DM_REGION_END         (DM_REGION_END       )
   )
   load_store_unit_i
   (
-    .clk                   ( clk                    ),
-    .rst_n                 ( rst_ni                 ),
-
-    // LSU pipeline 
-    .lsu_pipe_i            ( lsu_pipe               ),
+    .clk                   ( clk                ),
+    .rst_n                 ( rst_ni             ),
 
     // ID/EX pipeline
-    //.id_ex_pipe_i          ( id_ex_pipe           ),
+    .id_ex_pipe_i          ( id_ex_pipe         ),
 
-    // Scoreboard entry from LSU
-    .scoreboard_entries_o  ( scoreboard_entries_lsu ),
+    .lsu_pipe_i            ( lsu_pipe           ),
+
+    .lsu_wb_pipe_o         ( lsu_wb_pipe        ),
 
     // Controller
-    .ctrl_fsm_i            ( ctrl_fsm               ),
+    .ctrl_fsm_i            ( ctrl_fsm           ),
 
     // Data OBI interface
-    .m_c_obi_data_if       ( m_c_obi_data_if        ),
+    .m_c_obi_data_if       ( m_c_obi_data_if    ),
 
     // Control signals
-    .busy_o                ( lsu_busy               ),
-    .interruptible_o       ( lsu_interruptible      ),
+    .busy_o                ( lsu_busy           ),
+    .interruptible_o       ( lsu_interruptible  ),
 
     // Trigger match
-    .trigger_match_0_i     ( trigger_match_ex       ),
+    .trigger_match_0_i     ( trigger_match_ex   ),
 
     // Stage 0 outputs (EX)
-    .lsu_split_0_o         ( lsu_split_ex           ),
-    .lsu_first_op_0_o      ( lsu_first_op_ex        ),
-    .lsu_last_op_0_o       ( lsu_last_op_ex         ),
+    .lsu_split_0_o         ( lsu_split_ex       ),
+    .lsu_first_op_0_o      ( lsu_first_op_ex    ),
+    .lsu_last_op_0_o       ( lsu_last_op_ex     ),
 
-    // Outputs to trigger module    
-    .lsu_addr_o            ( lsu_addr_ex            ),
-    .lsu_we_o              ( lsu_we_ex              ),
-    .lsu_be_o              ( lsu_be_ex              ),
+    // Outputs to trigger module
+    .lsu_addr_o            ( lsu_addr_ex        ),
+    .lsu_we_o              ( lsu_we_ex          ),
+    .lsu_be_o              ( lsu_be_ex          ),
 
     // Stage 1 outputs (WB)
     // lsu_err_1_o has WB timing and is used by the controller. Does not go through the wb_stage, and does not have
     // any sticky bits associated with it. The sticky bits for LSU related signals within the WB stage are only needed
     // for MPU errors and watchpoint triggers. All LSU instructions that gets through the WPT and MPU will retire immediately
     // when data_rvalid arrives. data_err_i will always come from the bus.
-    .lsu_err_1_o           ( lsu_err_wb             ),
-    .lsu_rdata_1_o         ( lsu_rdata_wb           ),
-    .lsu_mpu_status_1_o    ( lsu_mpu_status_wb      ),
-    .lsu_wpt_match_1_o     ( lsu_wpt_match_wb       ),
-    
-    // Valid/ready    
-    .valid_0_i             ( lsu_valid_ex           ), // First LSU stage (EX)
-    .ready_0_o             ( lsu_ready_0            ),
-    .valid_0_o             ( lsu_valid_0            ),
-    .ready_0_i             ( lsu_ready_ex           ),
-    
-    .valid_1_i             ( lsu_valid_wb           ), // Second LSU stage (WB)
-    .ready_1_o             ( lsu_ready_1            ),
-    .valid_1_o             ( lsu_valid_1            ),
-    .ready_1_i             ( lsu_ready_wb           ),
-    
-    // eXtension interface    
-    .xif_mem_if            ( xif_mem_if             ),
-    .xif_mem_result_if     ( xif_mem_result_if      )
+    .lsu_err_1_o           ( lsu_err_wb         ),
+    .lsu_rdata_1_o         ( lsu_rdata_wb       ),
+    .lsu_mpu_status_1_o    ( lsu_mpu_status_wb  ),
+    .lsu_wpt_match_1_o     ( lsu_wpt_match_wb   ),
+
+    // Valid/ready
+    .valid_0_i             ( lsu_valid_ex       ), // First LSU stage (EX)
+    .ready_0_o             ( lsu_ready_0        ),
+    .valid_0_o             ( lsu_valid_0        ),
+    .ready_0_i             ( lsu_ready_ex       ),
+    .done_o                ( done               ),
+    .wb_ready_i            ( wb_ready           ),
+    .ex_valid_i            ( ex_valid           ),
+    .ex_ready_i            ( ex_ready           ),
+
+    .valid_1_i             ( lsu_valid_wb       ), // Second LSU stage (WB)
+    .ready_1_o             ( lsu_ready_1        ),
+    .valid_1_o             ( lsu_valid_1        ),
+    .ready_1_i             ( lsu_ready_wb       ),
+
+    //.program_order_o       ( program_order      ),
+
+    .lsu_last_op_o         ( lsu_last_op        ),
+    .lsu_first_op_o        ( lsu_first_op       ),
+
+    // eXtension interface
+    .xif_mem_if            ( xif_mem_if         ),
+    .xif_mem_result_if     ( xif_mem_result_if  )
   );
 
   ////////////////////////////////////////////////////////////////////////////////////////
@@ -739,6 +746,8 @@ module cv32e40x_core import cv32e40x_pkg::*;
 
     // EX/WB pipeline
     .ex_wb_pipe_i               ( ex_wb_pipe                   ),
+
+    .lsu_wb_pipe_i              ( lsu_wb_pipe                  ),
 
     // Controller
     .ctrl_fsm_i                 ( ctrl_fsm                     ),
@@ -776,7 +785,10 @@ module cv32e40x_core import cv32e40x_pkg::*;
     .clic_pa_i                  ( csr_clic_pa                  ),
 
     .last_op_o                  ( last_op_wb                   ),
-    .abort_op_o                 ( abort_op_wb                  )
+    .abort_op_o                 ( abort_op_wb                  ),
+
+    //.lsu_program_order_i        ( program_order                ),
+    .priority_i                 ( ex_program_order             )
   );
 
   //////////////////////////////////////
@@ -836,10 +848,12 @@ module cv32e40x_core import cv32e40x_pkg::*;
 
     // ID/EX pipeline
     .id_ex_pipe_i               ( id_ex_pipe             ),
+    .lsu_pipe_i                 ( lsu_pipe               ),
     .csr_illegal_o              ( csr_illegal            ),
 
     // EX/WB pipeline
     .ex_wb_pipe_i               ( ex_wb_pipe             ),
+    .lsu_wb_pipe_i              ( lsu_wb_pipe            ),
 
     // From controller_fsm
     .ctrl_fsm_i                 ( ctrl_fsm               ),
@@ -906,15 +920,24 @@ module cv32e40x_core import cv32e40x_pkg::*;
     .csr_mnxti_read_i               ( csr_mnxti_read         ),
     .csr_irq_enable_write_i         ( csr_irq_enable_write   ),
 
+    // From ID/LSU pipeline        
+    .lsu_pipe_i                     ( lsu_pipe               ),
+
     // From EX/WB pipeline
     .ex_wb_pipe_i                   ( ex_wb_pipe             ),
     .mpu_status_wb_i                ( mpu_status_wb          ),
     .wpt_match_wb_i                 ( wpt_match_wb           ),
 
+    // From LSU/WB pipeline       
+    .lsu_wb_pipe_i                  ( lsu_wb_pipe            ),
+
     // last_op bits
     .last_op_id_i                   ( last_op_id             ),
+    .lsu_op_last_i                  ( lsu_last_op            ),
     .last_op_ex_i                   ( last_op_ex             ),
     .last_op_wb_i                   ( last_op_wb             ),
+    
+    .first_op_lsu_i                 ( lsu_first_op_ex        ),
 
     .abort_op_id_i                  ( abort_op_id            ),
     .abort_op_wb_i                  ( abort_op_wb            ),
@@ -985,6 +1008,9 @@ module cv32e40x_core import cv32e40x_pkg::*;
     .id_valid_i                     ( id_valid               ),
     .ex_ready_i                     ( ex_ready               ),
     .ex_valid_i                     ( ex_valid               ),
+    .lsu_valid_i                    ( lsu_valid_0            ),
+    .lsu_ready_i                    ( lsu_ready_0            ),
+    .lsu_ready_wb_i                 ( lsu_ready_wb           ),
     .wb_ready_i                     ( wb_ready               ),
     .wb_valid_i                     ( wb_valid               ),
 
@@ -1118,29 +1144,5 @@ module cv32e40x_core import cv32e40x_pkg::*;
     .wdata_i            ( rf_wdata    ),
     .we_i               ( rf_we       )
   );
-
-////////////////////////////////////////////////////////////////////////////////////////
-// Scoreboard                                                                         //
-////////////////////////////////////////////////////////////////////////////////////////
-
-cv32e40x_scoreboard
-#(
-  .RV32E (RV32E)
-)
-scoreboard_i
-(
-  // Scoreboard entry in ID stage
-  .scoreboard_entries__id_i         ( scoreboard_entries_id     ),
-
-  // Scoreboard entry in EX stage
-  .scoreboard_entries_ex_i         ( scoreboard_entries_ex      ),
-
-  // Scoreboard entry in LSU
-  .scoreboard_entries_lsu_i         ( scoreboard_entries_lsu    ),
-
-  // Scoreboard entry in WB stage
-  .scoreboard_entries_wb_i         ( scoreboard_entries_wb      )
-);
-
 
 endmodule

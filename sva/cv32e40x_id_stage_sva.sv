@@ -56,10 +56,12 @@ module cv32e40x_id_stage_sva
   input logic           sys_mret_insn,
   input logic           sys_wfi_insn,
   input logic           ex_ready_i,
+  input logic           lsu_ready_i,
   input logic           illegal_insn,
   input csr_opcode_e    csr_op,
   input if_id_pipe_t    if_id_pipe_i,
   input id_ex_pipe_t    id_ex_pipe_o,
+  input lsu_pipe_t      lsu_pipe_o,
   input logic           id_ready_o,
   input logic           id_valid_o,
   input ctrl_fsm_t      ctrl_fsm_i,
@@ -71,9 +73,6 @@ module cv32e40x_id_stage_sva
   input logic           alu_jmpr,
   input logic [31:0]    jmp_target_o,
   input logic           jmp_taken_id_ctrl_i
-
-
-
 );
 
 /* todo: check and fix/remove
@@ -153,6 +152,15 @@ module cv32e40x_id_stage_sva
                       (jalr_fw == operand_a_fw))
       else `uvm_error("id_stage", "jalr_fw does not match operand_a_fw")
 
+    //assert not (id_ex_pipe_o.instruction_id == lsu_pipe_o.instruction_id), "Instruction Id's are equal"
+
+  // a_check_instruction_id :
+  //   assert property (@(posedge clk) disable iff (!rst_n)
+  //                     ((id_valid_o && ex_ready_i) || (id_valid_o && lsu_ready_i))
+  //                     |->
+  //                     (id_ex_pipe_o.instruction_id == lsu_pipe_o.instruction_id))
+  //     else `uvm_error("instruction_id's are not equal")
+
   // Assert stable jump target for a jump instruction that stays multiple cycles in ID
   // Target must remain stable until instruction exits ID (id_valid && ex_ready, or
   // instructions is killed.
@@ -188,6 +196,5 @@ module cv32e40x_id_stage_sva
 
       end
     endgenerate
-
 endmodule // cv32e40x_id_stage_sva
 

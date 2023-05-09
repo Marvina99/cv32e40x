@@ -74,10 +74,12 @@ module cv32e40x_cs_registers import cv32e40x_pkg::*;
 
   // ID/EX pipeline
   input id_ex_pipe_t                    id_ex_pipe_i,
+  input lsu_pipe_t                      lsu_pipe_i,
   output logic                          csr_illegal_o,
 
   // EX/WB pipeline
   input  ex_wb_pipe_t                   ex_wb_pipe_i,
+  input  lsu_wb_pipe_t                   lsu_wb_pipe_i,
 
   // From controller_fsm
   input  ctrl_fsm_t                     ctrl_fsm_i,

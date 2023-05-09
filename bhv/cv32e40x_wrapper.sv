@@ -34,6 +34,7 @@
   `include "cv32e40x_rvfi_sva.sv"
   `include "cv32e40x_sequencer_sva.sv"
   `include "cv32e40x_clic_int_controller_sva.sv"
+  `include "cv32e40x_skid_buffer_sva.sv"
   `include "cv32e40x_register_file_sva.sv"
   `include "cv32e40x_wpt_sva.sv"
   `include "cv32e40x_debug_triggers_sva.sv"
@@ -183,6 +184,30 @@ module cv32e40x_wrapper
     (
       .branch_taken_ex_ctrl_i (core_i.controller_i.controller_fsm_i.branch_taken_ex),
       .*
+    );
+
+  // Adding some internal signal from the skid buffer module for verification 
+  bind cv32e40x_skid_buffer:
+    core_i.load_store_unit_i.skid_buffer_i cv32e40x_skid_buffer_sva 
+    #(
+      .DWIDTH                 (DWIDTH)
+    ) 
+    skid_buffer_sva
+    (
+      .clk              (clk                                              ),
+      .rst_n            (rst_n                                            ),
+
+      .i_data           (core_i.load_store_unit_i.wpt_resp_rdata          ),
+      .i_valid          (core_i.load_store_unit_i.wpt_resp_valid          ),
+      .o_ready          (core_i.load_store_unit_i.ready                   ),
+      
+      .o_data           (core_i.load_store_unit_i.resp_data),
+      .o_valid          (core_i.load_store_unit_i.valid                   ),
+      .i_ready          (core_i.load_store_unit_i.ready_1_i               ),
+
+      .ready_rg_i       (ready_rg                                         ),
+      .data_rg_i        (data_rg_i                                        ),
+      .bypass_rg_i      (bypass_rg                                        )   
     );
 
   bind cv32e40x_wb_stage:
@@ -530,7 +555,7 @@ endgenerate
          .branch_in_ex_i           ( core_i.controller_i.controller_fsm_i.branch_in_ex                    ),
          .branch_decision_ex_i     ( core_i.ex_stage_i.branch_decision_o                                  ),
          .dret_in_ex_i             ( core_i.ex_stage_i.id_ex_pipe_i.sys_dret_insn                         ),
-         .lsu_en_ex_i              ( core_i.ex_stage_i.id_ex_pipe_i.lsu_en                                ),
+         .lsu_en_ex_i              ( core_i.ex_stage_i.lsu_pipe_i.lsu_en                                ),
          .lsu_pmp_err_ex_i         ( 1'b0                          /* PMP not implemented in cv32e40x */  ),
          .lsu_pma_err_atomic_ex_i  ( core_i.load_store_unit_i.mpu_i.pma_i.atomic_access_i && // Todo: Consider making this a signal in the pma (no expressions allowed in module hookup)
                                     !core_i.load_store_unit_i.mpu_i.pma_i.pma_cfg_atomic                 ),

@@ -62,11 +62,17 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
 
   // From EX stage
   input  id_ex_pipe_t id_ex_pipe_i,
+  input  lsu_pipe_t   lsu_pipe_i,
   input  logic        branch_decision_ex_i,       // branch decision signal from EX ALU
   input  logic        last_op_ex_i,               // EX stage contains the last operation of an instruction
 
+  // From LSU
+  input   logic       first_op_lsu_i,
+  input   logic       lsu_op_last_i,              // LSU stage contains the last operation of an instruction 
+
   // From WB stage
   input  ex_wb_pipe_t ex_wb_pipe_i,
+  input  lsu_wb_pipe_t lsu_wb_pipe_i,
   input  logic [1:0]  lsu_err_wb_i,               // LSU caused bus_error in WB stage, gated with data_rvalid_i inside load_store_unit
   input  logic        last_op_wb_i,               // WB stage contains the last operation of an instruction
   input  logic        abort_op_wb_i,              // WB stage contains an (to be) aborted instruction or sequence
@@ -115,6 +121,9 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
   input  logic        id_valid_i,       // ID stage has valid (non-bubble) data for next stage
   input  logic        ex_ready_i,       // EX stage is ready for new data
   input  logic        ex_valid_i,       // EX stage has valid (non-bubble) data for next stage
+  input  logic        lsu_valid_i,      // LSU stage has valid data for next stage
+  input  logic        lsu_ready_i,      // First half of LSU stage is ready for new data
+  input  logic        lsu_ready_wb_i,    // WB stage of LSU is ready for new data
   input  logic        wb_ready_i,       // WB stage is ready for new data,
   input  logic        wb_valid_i,       // WB stage ha valid (non-bubble) data
 
@@ -563,11 +572,11 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
   assign ctrl_fsm_o.mhpmevent.data_read     = m_c_obi_data_if.s_req.req && m_c_obi_data_if.s_gnt.gnt && !m_c_obi_data_if.req_payload.we;
   assign ctrl_fsm_o.mhpmevent.data_write    = m_c_obi_data_if.s_req.req && m_c_obi_data_if.s_gnt.gnt && m_c_obi_data_if.req_payload.we;
   assign ctrl_fsm_o.mhpmevent.if_invalid    = !if_valid_i && id_ready_i;
-  assign ctrl_fsm_o.mhpmevent.id_invalid    = !id_valid_i && ex_ready_i;
-  assign ctrl_fsm_o.mhpmevent.ex_invalid    = !ex_valid_i && wb_ready_i;
+  assign ctrl_fsm_o.mhpmevent.id_invalid    = !id_valid_i && (ex_ready_i || lsu_ready_i);
+  assign ctrl_fsm_o.mhpmevent.ex_invalid    = (!ex_valid_i || !lsu_valid_i) && (wb_ready_i || lsu_ready_wb_i);
   assign ctrl_fsm_o.mhpmevent.wb_invalid    = !wb_valid_i;
-  assign ctrl_fsm_o.mhpmevent.id_jalr_stall = ctrl_byp_i.jalr_stall && !id_valid_i && ex_ready_i;
-  assign ctrl_fsm_o.mhpmevent.id_ld_stall   = ctrl_byp_i.load_stall && !id_valid_i && ex_ready_i;
+  assign ctrl_fsm_o.mhpmevent.id_jalr_stall = ctrl_byp_i.jalr_stall && !id_valid_i && (ex_ready_i || lsu_ready_i);
+  assign ctrl_fsm_o.mhpmevent.id_ld_stall   = ctrl_byp_i.load_stall && !id_valid_i && (ex_ready_i || lsu_ready_i);
   assign ctrl_fsm_o.mhpmevent.wb_data_stall = data_stall_wb_i;
 
 
@@ -995,7 +1004,7 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
           end
 
           // CLIC pointer in ID clears pointer fetch flag
-          if (clic_ptr_in_id && id_valid_i && ex_ready_i) begin
+          if (clic_ptr_in_id && id_valid_i && (ex_ready_i || lsu_ready_i)) begin
             clic_ptr_in_progress_id_clear = 1'b1;
           end
 
@@ -1201,7 +1210,7 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
     if (rst_n == 1'b0) begin
       interrupt_blanking_q <= 1'b0;
     end else begin
-      interrupt_blanking_q <= ex_wb_pipe_i.instr_valid && ex_wb_pipe_i.lsu_en;
+      interrupt_blanking_q <= lsu_wb_pipe_i.instr_valid && lsu_wb_pipe_i.lsu_en;
     end
   end
 
@@ -1243,7 +1252,7 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
       // other conditions prevent counting.
       // CLIC: Exluding pointer fetches as they are not instructions.
       //       mret pointers will finish the mret->ptr sequence and will update wb_counter_event (instr_meta.mret_ptr is 1)
-      if (ex_valid_i && wb_ready_i && last_op_ex_i && !id_ex_pipe_i.instr_meta.clic_ptr)  begin
+      if ((ex_valid_i || lsu_valid_i) && (wb_ready_i || lsu_ready_wb_i) && (last_op_ex_i || lsu_op_last_i) && !id_ex_pipe_i.instr_meta.clic_ptr)  begin
         wb_counter_event <= 1'b1;
       end else begin
         // Keep event flag high while WB is halted, as we don't know if it will retire yet
@@ -1293,12 +1302,12 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
       sequence_in_progress_id <= 1'b0;
     end else begin
       if (!sequence_in_progress_id) begin
-        if (id_valid_i && ex_ready_i && first_op_id_i && !(last_op_id_i || abort_op_id_i)) begin // id_valid implies if_id_pipe.instr.valid
+        if (id_valid_i && (ex_ready_i || lsu_ready_i) && first_op_id_i && !(last_op_id_i || abort_op_id_i)) begin // id_valid implies if_id_pipe.instr.valid
           sequence_in_progress_id <= 1'b1;
         end
       end else begin
         // sequence_in_progress_id is set, clear when last_op retires or ID stage is killed
-        if (id_valid_i && ex_ready_i && (last_op_id_i || abort_op_id_i)) begin
+        if (id_valid_i && (ex_ready_i || lsu_ready_i) && (last_op_id_i || abort_op_id_i)) begin
           sequence_in_progress_id <= 1'b0;
         end
       end
@@ -1432,7 +1441,7 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
           commit_valid_q <= 1'b0;
           commit_kill_q  <= 1'b0;
         end else begin
-          if ((ex_valid_i && wb_ready_i) || ctrl_fsm_o.kill_ex) begin
+          if (((ex_valid_i || lsu_valid_i) && (wb_ready_i || lsu_ready_wb_i)) || ctrl_fsm_o.kill_ex) begin
             commit_valid_q <= 1'b0;
             commit_kill_q  <= 1'b0;
           end else begin

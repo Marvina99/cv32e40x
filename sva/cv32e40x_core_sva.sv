@@ -44,9 +44,13 @@ module cv32e40x_core_sva
   input dcsr_t       dcsr,
   input              if_id_pipe_t if_id_pipe,
   input id_ex_pipe_t id_ex_pipe,
+  input lsu_wb_pipe_t   lsu_wb_pipe,
+  input lsu_pipe_t   lsu_pipe,
   input              id_stage_multi_cycle_id_stall,
   input logic        id_stage_id_valid,
   input logic        ex_ready,
+  input logic        lsu_ready_0,
+  input logic        lsu_valid_0,
   input logic        irq_ack, // irq ack output
   input logic        irq_clic_shv, // ack'ed irq is a CLIC SHV
   input logic        irq_req_ctrl, // Interrupt controller request an interrupt
@@ -553,7 +557,7 @@ end
   // for one cycle after an rvalid has been observed.
 property p_no_irq_after_lsu;
   @(posedge clk) disable iff (!rst_ni)
-  (  wb_valid && ex_wb_pipe.lsu_en && ex_wb_pipe.instr_valid
+  (  wb_valid && lsu_wb_pipe.lsu_en && lsu_wb_pipe.instr_valid
      |=>
      !ctrl_interrupt_allowed);
 endproperty;
