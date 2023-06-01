@@ -123,12 +123,14 @@ module cv32e40x_controller import cv32e40x_pkg::*;
   input rf_addr_t     rf_raddr_id_i[REGFILE_NUM_READ_PORTS],
 
   input  logic        id_ready_i,               // ID stage is ready
-  input  logic        id_valid_i,               // ID stage is done
+  input  logic        id_valid_ex_i,            // ID has valid data for EX stage
+  input  logic        id_valid_lsu_i,           // ID has valid data for LSU stage
   input  logic        ex_ready_i,               // EX stage is ready
   input  logic        ex_valid_i,               // EX stage is done
   input  logic        lsu_valid_i,              // LSU stage is done
   input  logic        lsu_ready_i,              // LSU stage is ready
   input  logic        lsu_ready_wb_i,           // WB stage of LSU is ready for new data
+  input  logic        lsu_ready,                // LSU ready in WB stage
   input  logic        wb_ready_i,               // WB stage is ready
   input  logic        wb_valid_i,               // WB stage is done
 
@@ -173,7 +175,8 @@ module cv32e40x_controller import cv32e40x_pkg::*;
     // From ID stage
     .if_id_pipe_i                ( if_id_pipe_i             ),
     .id_ready_i                  ( id_ready_i               ),
-    .id_valid_i                  ( id_valid_i               ),
+    .id_valid_ex_i               ( id_valid_ex_i            ),
+    .id_valid_lsu_i              ( id_valid_lsu_i           ),
     .alu_jmp_id_i                ( alu_jmp_id_i             ),
     .sys_mret_id_i               ( sys_mret_id_i            ),
     .alu_en_id_i                 ( alu_en_id_i              ),
@@ -280,6 +283,8 @@ module cv32e40x_controller import cv32e40x_pkg::*;
 
     // From WB
     .wb_ready_i                 ( wb_ready_i               ),
+    .lsu_ready_wb_i             ( lsu_ready_wb_i           ),
+    .lsu_ready_i                ( lsu_ready                ),
     .csr_irq_enable_write_i     ( csr_irq_enable_write_i   ),
 
     // Outputs

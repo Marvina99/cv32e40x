@@ -118,7 +118,8 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
   // Stage valid/ready signals
   input  logic        if_valid_i,       // IF stage has valid (non-bubble) data for next stage
   input  logic        id_ready_i,       // ID stage is ready for new data
-  input  logic        id_valid_i,       // ID stage has valid (non-bubble) data for next stage
+  input  logic        id_valid_ex_i,    // ID stage has valid (non-bubble) data for EX stage
+  input  logic        id_valid_lsu_i,    // Id stage has valid data for LSU stage 
   input  logic        ex_ready_i,       // EX stage is ready for new data
   input  logic        ex_valid_i,       // EX stage has valid (non-bubble) data for next stage
   input  logic        lsu_valid_i,      // LSU stage has valid data for next stage
@@ -572,11 +573,11 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
   assign ctrl_fsm_o.mhpmevent.data_read     = m_c_obi_data_if.s_req.req && m_c_obi_data_if.s_gnt.gnt && !m_c_obi_data_if.req_payload.we;
   assign ctrl_fsm_o.mhpmevent.data_write    = m_c_obi_data_if.s_req.req && m_c_obi_data_if.s_gnt.gnt && m_c_obi_data_if.req_payload.we;
   assign ctrl_fsm_o.mhpmevent.if_invalid    = !if_valid_i && id_ready_i;
-  assign ctrl_fsm_o.mhpmevent.id_invalid    = !id_valid_i && (ex_ready_i || lsu_ready_i);
-  assign ctrl_fsm_o.mhpmevent.ex_invalid    = (!ex_valid_i || !lsu_valid_i) && (wb_ready_i || lsu_ready_wb_i);
+  assign ctrl_fsm_o.mhpmevent.id_invalid    = (!id_valid_ex_i && ex_ready_i) || (!id_valid_lsu_i && lsu_ready_i);
+  assign ctrl_fsm_o.mhpmevent.ex_invalid    = !ex_valid_i && wb_ready_i;
   assign ctrl_fsm_o.mhpmevent.wb_invalid    = !wb_valid_i;
-  assign ctrl_fsm_o.mhpmevent.id_jalr_stall = ctrl_byp_i.jalr_stall && !id_valid_i && (ex_ready_i || lsu_ready_i);
-  assign ctrl_fsm_o.mhpmevent.id_ld_stall   = ctrl_byp_i.load_stall && !id_valid_i && (ex_ready_i || lsu_ready_i);
+  assign ctrl_fsm_o.mhpmevent.id_jalr_stall = ctrl_byp_i.jalr_stall && !id_valid_ex_i && ex_ready_i;
+  assign ctrl_fsm_o.mhpmevent.id_ld_stall   = ctrl_byp_i.load_stall && !id_valid_ex_i && ex_ready_i;
   assign ctrl_fsm_o.mhpmevent.wb_data_stall = data_stall_wb_i;
 
 
@@ -1004,7 +1005,7 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
           end
 
           // CLIC pointer in ID clears pointer fetch flag
-          if (clic_ptr_in_id && id_valid_i && (ex_ready_i || lsu_ready_i)) begin
+          if (clic_ptr_in_id && ((id_valid_ex_i && ex_ready_i) || (id_valid_lsu_i && lsu_ready_i))) begin
             clic_ptr_in_progress_id_clear = 1'b1;
           end
 
@@ -1302,12 +1303,12 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
       sequence_in_progress_id <= 1'b0;
     end else begin
       if (!sequence_in_progress_id) begin
-        if (id_valid_i && (ex_ready_i || lsu_ready_i) && first_op_id_i && !(last_op_id_i || abort_op_id_i)) begin // id_valid implies if_id_pipe.instr.valid
+        if (((id_valid_ex_i && ex_ready_i) || (id_valid_lsu_i && lsu_ready_i)) && first_op_id_i && !(last_op_id_i || abort_op_id_i)) begin // id_valid implies if_id_pipe.instr.valid
           sequence_in_progress_id <= 1'b1;
         end
       end else begin
         // sequence_in_progress_id is set, clear when last_op retires or ID stage is killed
-        if (id_valid_i && (ex_ready_i || lsu_ready_i) && (last_op_id_i || abort_op_id_i)) begin
+        if (((id_valid_ex_i && ex_ready_i) || (id_valid_lsu_i && lsu_ready_i)) && (last_op_id_i || abort_op_id_i)) begin
           sequence_in_progress_id <= 1'b0;
         end
       end

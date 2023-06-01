@@ -57,7 +57,9 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
   input  logic        csr_mnxti_read_i,           // CSR is reading mnxti (EX)
 
   // From WB
-  input  logic        wb_ready_i,                 // WB stage is ready
+  input  logic        wb_ready_i,                 // WB stage is ready for EX
+  input  logic        lsu_ready_wb_i,             // Wb stage is ready for LSU
+  input  logic        lsu_ready_i,                // LSU is ready in Wb stage 
   input  logic        csr_irq_enable_write_i,     // WB is writing to a CSR that may enable an interrupt.
 
   // Controller Bypass outputs
@@ -95,13 +97,14 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
 
   assign rf_we_ex = id_ex_pipe_i.rf_we && id_ex_pipe_i.instr_valid;
   assign rf_we_lsu = lsu_pipe_i.rf_we && lsu_pipe_i.instr_valid;
-  assign rf_we_wb = ex_wb_pipe_i.rf_we && ex_wb_pipe_i.instr_valid;
+  
+  assign rf_we_wb = (lsu_wb_pipe_i.lsu_en && lsu_wb_pipe_i.instr_valid) ? (lsu_wb_pipe_i.rf_we && lsu_wb_pipe_i.instr_valid) : (ex_wb_pipe_i.rf_we && ex_wb_pipe_i.instr_valid);
 
   assign lsu_en_wb = lsu_wb_pipe_i.lsu_en && lsu_wb_pipe_i.instr_valid;
 
   assign rf_waddr_ex  = id_ex_pipe_i.rf_waddr;
   assign rf_waddr_lsu = lsu_pipe_i.rf_waddr;
-  assign rf_waddr_wb  = lsu_wb_pipe_i.lsu_en ? lsu_wb_pipe_i.rf_waddr : ex_wb_pipe_i.rf_waddr; // TODO: If XIF OoO is allowed, we need to look at WB stage outputs instead
+  assign rf_waddr_wb  = (lsu_wb_pipe_i.lsu_en && lsu_wb_pipe_i.instr_valid) ? lsu_wb_pipe_i.rf_waddr : ex_wb_pipe_i.rf_waddr; // TODO: If XIF OoO is allowed, we need to look at WB stage outputs instead
 
   // The following unqualified signals are such that they can have a false positive (but no false negative).
   //
@@ -209,8 +212,8 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
     // Stall because of load or XIF operation
     if (
         (id_ex_pipe_i.xif_en && rf_we_ex && |rf_rd_ex_hz) || // xif hazard (EX)
-        (lsu_pipe_i.lsu_en && rf_we_lsu && |rf_rd_lsu_hz) || // load-use hazard (LSU)
-        (!wb_ready_i                                  && rf_we_wb && |rf_rd_wb_hz)    // load-use hazard (WB during wait-state)
+        ((lsu_pipe_i.lsu_en && lsu_pipe_i.instr_valid) && rf_we_lsu && |rf_rd_lsu_hz) || // load-use hazard (LSU)
+        (!lsu_ready_i                                  && rf_we_wb && |rf_rd_wb_hz)    // load-use hazard (WB during wait-state)
        )
     begin
       ctrl_byp_o.load_stall  = 1'b1;

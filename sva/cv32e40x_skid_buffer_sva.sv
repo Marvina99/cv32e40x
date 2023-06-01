@@ -38,7 +38,7 @@ module cv32e40x_skid_buffer_sva
     // the data is not allowed to change (i_data)
     property p_data_held_when_not_ready;
         @(posedge clk) disable iff (!rst_n)
-        i_valid && !i_ready |=> i_valid && $stable(i_data);
+        i_valid && !o_ready |=> i_valid && $stable(i_data);
     endproperty 
 
     assert property(p_data_held_when_not_ready);
@@ -67,7 +67,7 @@ module cv32e40x_skid_buffer_sva
     // or be stored in the buffer
     property p_passthrough_or_store;
         @(posedge clk) disable iff (!rst_n)
-        (i_valid && !o_ready && o_valid && !i_ready) |=> (data_rg_i == $past(i_data));
+        (!i_ready && i_valid && ready_rg_i) |=> (data_rg_i == $past(i_data));
     endproperty
 
     assert property(p_passthrough_or_store);

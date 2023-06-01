@@ -86,9 +86,12 @@ module cv32e40x_wb_stage import cv32e40x_pkg::*;
   output logic          abort_op_o,
 
   //input  logic          lsu_program_order_i,
-  input  logic [1:0]    priority_i
+  input  logic [1:0]    priority_i,
+
+  input  logic          lsu_split_i
 );
-  logic                 instr_valid;
+  logic                 instr_valid_ex;
+  logic                 instr_valid_lsu;
   logic                 wb_valid;
   logic                 lsu_exception;
 
@@ -110,10 +113,12 @@ module cv32e40x_wb_stage import cv32e40x_pkg::*;
   // WB stage has two halt sources, ctrl_fsm_i.halt_wb and ctrl_fsm_i.halt_limited_wb. The limited halt is only set during
   // the SLEEP state, and is used to prevent timing paths from interrupt inputs to obi outputs when waking up from SLEEP.
 
-  //assign instr_valid = (lsu_wb_pipe_i.instr_valid || ex_wb_pipe_i.instr_valid) && !ctrl_fsm_i.kill_wb && !ctrl_fsm_i.halt_wb && !ctrl_fsm_i.halt_limited_wb;
 
-  assign instr_valid = lsu_wb_pipe_i.lsu_en ? lsu_wb_pipe_i.instr_valid && !ctrl_fsm_i.kill_wb && !ctrl_fsm_i.halt_wb && !ctrl_fsm_i.halt_limited_wb :
-                        (ex_wb_pipe_i.instr_valid && !ctrl_fsm_i.kill_wb && !ctrl_fsm_i.halt_wb && !ctrl_fsm_i.halt_limited_wb);
+
+  assign instr_valid_ex   = ex_wb_pipe_i.instr_valid && !ctrl_fsm_i.kill_wb && !ctrl_fsm_i.halt_wb && !ctrl_fsm_i.halt_limited_wb;
+
+  // instr_valid signal for load and store instructions
+  assign instr_valid_lsu  = lsu_wb_pipe_i.instr_valid && !ctrl_fsm_i.kill_wb && !ctrl_fsm_i.halt_wb && !ctrl_fsm_i.halt_limited_wb;
 
 
    
@@ -138,20 +143,20 @@ module cv32e40x_wb_stage import cv32e40x_pkg::*;
   // rf_we_wb_o is deasserted if lsu_mpu_status is not equal to MPU_OK
 
   // TODO: Could use result interface.we into account if out of order completion is allowed.
-  assign rf_we_wb_o     = lsu_wb_pipe_i.lsu_en ? (lsu_wb_pipe_i.rf_we && !lsu_exception && !xif_waiting && !xif_exception && !lsu_wpt_match && instr_valid) :
-                          (ex_wb_pipe_i.rf_we && !lsu_exception && !xif_waiting && !xif_exception && !lsu_wpt_match && instr_valid);  
+  assign rf_we_wb_o     = (lsu_wb_pipe_i.instr_valid && lsu_wb_pipe_i.lsu_en) ? (lsu_wb_pipe_i.rf_we && !lsu_exception && !xif_waiting && !xif_exception && !lsu_wpt_match && instr_valid_lsu) :
+                          (ex_wb_pipe_i.rf_we && !lsu_exception && !xif_waiting && !xif_exception && !lsu_wpt_match && instr_valid_ex);  
 
   // TODO: Could use result interface.rd into account if out of order completion is allowed.
-  assign rf_waddr_wb_o  = lsu_wb_pipe_i.lsu_en ? lsu_wb_pipe_i.rf_waddr :
+  assign rf_waddr_wb_o  = (lsu_wb_pipe_i.instr_valid && lsu_wb_pipe_i.lsu_en) ? lsu_wb_pipe_i.rf_waddr :
                           ex_wb_pipe_i.rf_waddr;
 
 
   // TODO: Could use result interface.rd into account if out of order completion is allowed.
   // Not using any flopped/sticky version of lsu_rdata_i. The sticky bits are only needed for MPU errors and watchpoint triggers.
   // Any true load that succeeds will write the RF and will never be halted or killed by the controller. (wb_valid during the same cycle as lsu_valid_i).
-  assign rf_wdata_wb_o  =lsu_wb_pipe_i.lsu_en ? lsu_rdata_i               :
-                         (ex_wb_pipe_i.xif_en ? xif_result_if.result.data :
-                         clic_pa_valid_i      ? clic_pa_i                 :
+  assign rf_wdata_wb_o  =(lsu_wb_pipe_i.instr_valid && lsu_wb_pipe_i.lsu_en) ? lsu_rdata_i :
+                         (ex_wb_pipe_i.xif_en ? xif_result_if.result.data                  :
+                         clic_pa_valid_i      ? clic_pa_i                                  :
                          ex_wb_pipe_i.rf_wdata);
 
   //////////////////////////////////////////////////////////////////////////////
@@ -187,7 +192,7 @@ module cv32e40x_wb_stage import cv32e40x_pkg::*;
   end
 
   //assign wb_ready_o = (ctrl_fsm_i.kill_wb) || (lsu_ready_i && !xif_waiting && !ctrl_fsm_i.halt_wb && !ctrl_fsm_i.halt_limited_wb);
-  assign wb_ready_o = (ctrl_fsm_i.kill_wb) ||  ((ready_for_ex  || lsu_ready_i) && !xif_waiting && !ctrl_fsm_i.halt_wb && !ctrl_fsm_i.halt_limited_wb);
+  assign wb_ready_o = (ctrl_fsm_i.kill_wb) ||  ((ready_for_ex  || lsu_ready_i) && !data_stall_o && !xif_waiting && !ctrl_fsm_i.halt_wb && !ctrl_fsm_i.halt_limited_wb);
   // wb_valid
   //
   // - Will be 0 for interrupted instruction and debug entry
@@ -196,24 +201,24 @@ module cv32e40x_wb_stage import cv32e40x_pkg::*;
   // - Will be 1 for both phases of a split misaligned load/store that completes without MPU errors.
   //   If an MPU error occurs, wb_valid will be 1 due to lsu_exception (for any phase where the error occurs)
   // - Will be 0 for CLIC pointer fetches todo: Do we need wb_valid=1 for faulted pointer fetches for RVFI?
-  assign wb_valid = ((!lsu_wb_pipe_i.lsu_en && !xif_waiting) ||    // Non-LSU instructions have valid result in WB, also for exceptions, unless we are waiting for a coprocessor
-                     ( lsu_wb_pipe_i.lsu_en && lsu_valid   )       // LSU instructions have valid result based on data_rvalid_i or the flopped version in case of watchpoint triggers.
+  assign wb_valid = ((!lsu_wb_pipe_i.instr_valid && !xif_waiting) && instr_valid_ex) ||    // Non-LSU instructions have valid result in WB, also for exceptions, unless we are waiting for a coprocessor
+                     (((lsu_wb_pipe_i.lsu_en && lsu_wb_pipe_i.instr_valid) && lsu_valid) && instr_valid_lsu       // LSU instructions have valid result based on data_rvalid_i or the flopped version in case of watchpoint triggers.
                                                                   // todo: ideally a similar line is added here that delays signaling wb_valid until a WFI really retires.
                                                                   // This should be checked for bad timing paths. Currently RVFI contains a wb_valid_adjusted signal/hack to achieve the same
-                    ) && instr_valid;
+                    );
 
   // Letting all suboperations signal wb_valid
   assign wb_valid_o = wb_valid;
 
   // Signal that WB stage contains the last operation of an instruction
-  assign last_op_o = lsu_wb_pipe_i.lsu_en ? lsu_wb_pipe_i.last_op : ex_wb_pipe_i.last_op;
+  assign last_op_o = (lsu_wb_pipe_i.lsu_en && lsu_wb_pipe_i.instr_valid) ? lsu_wb_pipe_i.last_op : ex_wb_pipe_i.last_op;
 
   // Append any MPU exception to abort_op
   // An abort_op_o = 1 will terminate a sequence, either to take an exception or debug due to trigger match.
-  assign abort_op_o = ex_wb_pipe_i.abort_op || ( lsu_wb_pipe_i.lsu_en && lsu_exception) || (lsu_wb_pipe_i.lsu_en && lsu_wpt_match);
+  assign abort_op_o = ex_wb_pipe_i.abort_op || ( (lsu_wb_pipe_i.lsu_en && lsu_wb_pipe_i.instr_valid) && lsu_exception) || ((lsu_wb_pipe_i.lsu_en && lsu_wb_pipe_i.instr_valid) && lsu_wpt_match);
 
   // Export signal indicating WB stage stalled by load/store
-  assign data_stall_o = lsu_wb_pipe_i.lsu_en && !lsu_valid && instr_valid;
+  assign data_stall_o = (lsu_wb_pipe_i.lsu_en && lsu_wb_pipe_i.instr_valid) && !lsu_valid && instr_valid_lsu;
 
   // Flops for sticky LSU signals
   always_ff @(posedge clk, negedge rst_n) begin

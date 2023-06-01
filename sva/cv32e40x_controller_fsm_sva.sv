@@ -84,7 +84,7 @@ module cv32e40x_controller_fsm_sva
   input logic           abort_op_wb_i,
   input logic           csr_wr_in_wb_flush_i,
   input logic [2:0]     debug_cause_q,
-  input logic           id_valid_i,
+  input logic           id_valid_ex_i,
   input logic           first_op_if_i,
   input logic           first_op_id_i,
   input logic           first_op_ex_i,
@@ -762,7 +762,7 @@ end
   // Check that id stage is haltable after passing through an operation with abort_op=1
   a_id_halt_abort:
   assert property (@(posedge clk) disable iff (!rst_n)
-                    (id_valid_i && ex_ready_i && abort_op_id_i)
+                    (id_valid_ex_i && ex_ready_i && abort_op_id_i)
                     |=>
                     id_stage_haltable)
     else `uvm_error("controller", "ID stage not haltable after a deasserted operation")
@@ -779,7 +779,7 @@ end
   // Check that id stage is haltable after passing through an operation with abort_op=1
   a_id_halt_last:
   assert property (@(posedge clk) disable iff (!rst_n)
-                    (id_valid_i && ex_ready_i && last_op_id_i)
+                    (id_valid_ex_i && ex_ready_i && last_op_id_i)
                     |=>
                     id_stage_haltable)
     else `uvm_error("controller", "ID stage not haltable after a deasserted operation")
@@ -817,7 +817,7 @@ end
   // This assertion checks that both operations of secure mrets in ID see the same mcause.minhv.
   a_mret_id_ex_minhv_stable:
   assert property (@(posedge clk) disable iff (!rst_n)
-                    (id_valid_i && ex_ready_i && sys_en_id_i && sys_mret_id_i)
+                    (id_valid_ex_i && ex_ready_i && sys_en_id_i && sys_mret_id_i)
                     |=>
                     $stable(mcause_i.minhv))
     else `uvm_error("controller", "mcause.minhv not stable when mret goes from ID to EX")
@@ -847,7 +847,7 @@ end
                   (((id_ex_pipe_i.instr_meta.clic_ptr || id_ex_pipe_i.instr_meta.mret_ptr) && id_ex_pipe_i.instr_valid) ||
                   ((ex_wb_pipe_i.instr_meta.clic_ptr || ex_wb_pipe_i.instr_meta.mret_ptr) && ex_wb_pipe_i.instr_valid))
                   |->
-                  !id_valid_i)
+                  !id_valid_ex_i)
   else `uvm_error("controller", "CSR* not stalled in ID when CLIC pointer is in EX or WB")
 
   // When interrupts or debug is taken, the PC stored to dpc or mepc cannot come from a pointer

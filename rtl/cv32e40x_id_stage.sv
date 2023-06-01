@@ -100,7 +100,8 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
 
   // Stage ready/valid
   output logic        id_ready_o,     // ID stage is ready for new data
-  output logic        id_valid_o,     // ID stage has valid (non-bubble) data for next stage
+  output logic        id_valid_o,     // ID stage has valid (non-bubble) data for EX stage
+  output logic        id_valid_lsu_o, // ID stage has valid data for LSU stage
   input  logic        ex_ready_i,     // EX stage is ready for new data
   input  logic        lsu_ready_i,    // LSU stage is ready for new data
 
@@ -232,7 +233,7 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
     if(rst_n == 0) begin
       ID_counter <= 4'b0;
     end else begin
-      if(id_valid_o && (ex_ready_i || lsu_ready_i)) begin
+      if((id_valid_o && ex_ready_i && !lsu_en) || (lsu_ready_i && id_valid_lsu_o && lsu_en)) begin
         ID_counter <= ID_counter + 1;
       end 
     end
@@ -551,7 +552,7 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
       lsu_pipe_o.lsu_atop               <= 6'b0;
 
       lsu_pipe_o.rf_we                  <= 1'b0;
-      lsu_pipe_o.rf_waddr               <= '0;
+      lsu_pipe_o.rf_waddr               <= 1'b0;
 
       lsu_pipe_o.first_op               <= 1'b0;
       lsu_pipe_o.last_op                <= 1'b0;
@@ -562,7 +563,7 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
 
     end else begin
 
-      if (id_valid_o && lsu_ready_i) begin
+      if (id_valid_lsu_o && lsu_ready_i) begin
         lsu_pipe_o.instr_valid            <= 1'b1;
         lsu_pipe_o.first_op               <= first_op_o;
         lsu_pipe_o.last_op                <= last_op_o;
@@ -808,7 +809,10 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
   assign id_ready_o = ctrl_fsm_i.kill_id || (!multi_cycle_id_stall && ((ex_ready_i && !lsu_en) || (lsu_en && lsu_ready_i)) && !ctrl_fsm_i.halt_id && !xif_waiting);
 
   // multi_cycle_id_stall is currently tied to 1'b0. Will be used for Zce push/pop instructions.
-  assign id_valid_o = (instr_valid && !xif_waiting) || (multi_cycle_id_stall && !ctrl_fsm_i.kill_id && !ctrl_fsm_i.halt_id);
+  assign id_valid_o = ((instr_valid && !lsu_en) && !xif_waiting) || (multi_cycle_id_stall && !ctrl_fsm_i.kill_id && !ctrl_fsm_i.halt_id);
+  assign id_valid_lsu_o = ((instr_valid && lsu_en) && !xif_waiting) || (multi_cycle_id_stall && !ctrl_fsm_i.kill_id && !ctrl_fsm_i.halt_id);
+
+
 
   assign first_op_o  = if_id_pipe_i.first_op;
   // An mret with mcause.minhv set and mcause.mpp = PRIV_LVL_M will cause a pointer fetch, and that pointer fetch is the last operation of the mret.

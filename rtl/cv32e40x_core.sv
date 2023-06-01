@@ -291,6 +291,7 @@ module cv32e40x_core import cv32e40x_pkg::*;
   // Stage valid signals
   logic        if_valid;
   logic        id_valid;
+  logic        id_valid_lsu;
   logic        ex_valid;
   logic        wb_valid;
 
@@ -570,6 +571,7 @@ module cv32e40x_core import cv32e40x_pkg::*;
     // Pipeline handshakes
     .id_ready_o                   ( id_ready                  ),
     .id_valid_o                   ( id_valid                  ),
+    .id_valid_lsu_o               ( id_valid_lsu              ),
     .ex_ready_i                   ( ex_ready                  ),
     .lsu_ready_i                  ( lsu_ready_0               ),
 
@@ -788,7 +790,8 @@ module cv32e40x_core import cv32e40x_pkg::*;
     .abort_op_o                 ( abort_op_wb                  ),
 
     //.lsu_program_order_i        ( program_order                ),
-    .priority_i                 ( ex_program_order             )
+    .priority_i                 ( ex_program_order             ),
+    .lsu_split_i                ( lsu_split_ex                 )
   );
 
   //////////////////////////////////////
@@ -1005,12 +1008,14 @@ module cv32e40x_core import cv32e40x_pkg::*;
     .m_c_obi_data_if                ( m_c_obi_data_if        ),
 
     .id_ready_i                     ( id_ready               ),
-    .id_valid_i                     ( id_valid               ),
+    .id_valid_ex_i                  ( id_valid               ),
+    .id_valid_lsu_i                 ( id_valid_lsu           ),
     .ex_ready_i                     ( ex_ready               ),
     .ex_valid_i                     ( ex_valid               ),
     .lsu_valid_i                    ( lsu_valid_0            ),
     .lsu_ready_i                    ( lsu_ready_0            ),
     .lsu_ready_wb_i                 ( lsu_ready_wb           ),
+    .lsu_ready                      ( lsu_ready_1            ),  
     .wb_ready_i                     ( wb_ready               ),
     .wb_valid_i                     ( wb_valid               ),
 

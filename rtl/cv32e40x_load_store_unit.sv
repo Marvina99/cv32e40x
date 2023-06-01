@@ -431,6 +431,7 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   // misaligned_access is high for both transfers of a misaligned transfer
   // TODO: Give MPU a separate modified_access_i input
   assign misaligned_access = split_q || lsu_split_0_o || misaligned_halfword || (xif_req && (xif_mem_if.mem_req.attr[0] || xif_mem_if.mem_req.attr[1]));
+  
 
   // Check for misaligned accesses that need a second memory access
   // If one is detected, this is signaled with lsu_split_0_o.
@@ -468,9 +469,9 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   assign lsu_first_op_0_o = !split_q;
 
 
-  assign lsu_last_op_o  = lsu_pipe_i.lsu_en ? (!lsu_split_0_o && lsu_pipe_i.last_op) : lsu_pipe_i.last_op;
+  assign lsu_last_op_o  = (lsu_pipe_i.lsu_en && lsu_pipe_i.instr_valid) ? (lsu_last_op_0_o && lsu_pipe_i.last_op) : lsu_pipe_i.last_op;
   
-  assign lsu_first_op_o = lsu_pipe_i.lsu_en ? (!split_q && lsu_pipe_i.first_op) : lsu_pipe_i.first_op;
+  assign lsu_first_op_o = (lsu_pipe_i.lsu_en && lsu_pipe_i.instr_valid) ? (lsu_first_op_0_o && lsu_pipe_i.first_op) : lsu_pipe_i.first_op;
 
   // Busy if there are ongoing (or potentially outstanding) transfers
   // In the case of mpu errors, the LSU control logic can have outstanding transfers not seen by the response filter.
@@ -526,7 +527,7 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   // or if it is being used and the awaited response arrives (resp_rvalid).
   // XIF transactions bypass the pipeline, hence ready_1_i is not required for the second stage to
   // be ready for XIF transactions.
-  assign ready_1_o   = ((cnt_q == 2'b00) ? 1'b1 : resp_valid);
+  assign ready_1_o   = ((cnt_q == 2'b00) ? 1'b1 : resp_valid) && ready_1_i;
   assign xif_ready_1 = ((cnt_q == 2'b00) ? 1'b1 : resp_valid);
 
   // LSU second stage is valid when resp_valid (typically data_rvalid_i) is received. Both parts of a misaligned transfer will signal valid_1_o.
@@ -889,17 +890,6 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
   );
   
 
-  // always @(posedge clk, negedge rst_n) begin
-  //   if(rst_n == 1'b0) begin
-  //     program_order_o <= 1'b0;
-  //   end else begin
-  //     if(((lsu_pipe_i.instruction_id < id_ex_pipe_i.instruction_id) && lsu_pipe_i.instruction_id != 1'b0) || id_ex_pipe_i.instruction_id == 1'b0) begin
-  //       program_order_o <= 1'b1;
-  //     end else begin
-  //       program_order_o <= 1'b0;
-  //     end
-  //   end  
-  // end
 
   //////////////////////////////////////////////////////////////////////////////
   // LSU/WB pipeline register
@@ -931,7 +921,7 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
       end else 
       begin
         //lsu_wb_pipe_o.lsu_en <= 1'b0;
-        if ((ready_1_o && ready_0_o)) begin
+        if ((ready_1_o && ctrl_update)) begin
           lsu_wb_pipe_o.instr_valid     <= instr_valid;
           lsu_wb_pipe_o.instruction_id  <= lsu_pipe_i.instruction_id;
 

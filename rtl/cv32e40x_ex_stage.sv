@@ -191,7 +191,7 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
   //assign first_op_o = lsu_pipe_i.lsu_en ? (lsu_first_op_i && id_ex_pipe_i.first_op) : id_ex_pipe_i.first_op;
   
   assign first_op_o =  id_ex_pipe_i.first_op;
-  assign last_op_o  =  id_ex_pipe_i.first_op;
+  assign last_op_o  =  id_ex_pipe_i.last_op;
 
   ////////////////////////////
   //     _    _    _   _    //
@@ -349,15 +349,15 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
     if(rst_n == 0) begin
       priority_o <= '0;
     end else begin
-      if((lsu_pipe_i.instr_valid && lsu_pipe_i.lsu_en) && (id_ex_pipe_i.instr_valid && (id_ex_pipe_i.alu_en || id_ex_pipe_i.div_en || id_ex_pipe_i.mul_en || id_ex_pipe_i.sys_en || id_ex_pipe_i.xif_en))) begin
-        if(id_ex_pipe_i.instruction_id < lsu_pipe_i.instruction_id) begin
+      if((lsu_pipe_i.instr_valid) && (id_ex_pipe_i.instr_valid)) begin
+        if((id_ex_pipe_i.instruction_id < lsu_pipe_i.instruction_id) && !lsu_split_i) begin
           priority_o    <= 2'b10;
         end else begin
           priority_o    <= 2'b01;
         end
-        end else if(id_ex_pipe_i.instr_valid && (!lsu_pipe_i.lsu_en)) begin
+        end else if(id_ex_pipe_i.instr_valid && !lsu_pipe_i.instr_valid) begin
           priority_o      <= 2'b10;
-        end else if(lsu_pipe_i.instr_valid && lsu_pipe_i.lsu_en) begin
+        end else if(lsu_pipe_i.instr_valid) begin
           priority_o      <= 2'b01;
         end else begin
           priority_o      <= 2'b00;
@@ -414,7 +414,7 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
     end
     else
     begin
-      if (ex_valid_o && wb_ready_i) begin
+      if ((ex_valid_o && wb_ready_i)) begin
         ex_wb_pipe_o.instr_valid    <= 1'b1;
         ex_wb_pipe_o.instruction_id <= id_ex_pipe_i.instruction_id;
         ex_wb_pipe_o.priv_lvl       <= id_ex_pipe_i.priv_lvl;
@@ -423,7 +423,7 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
         ex_wb_pipe_o.abort_op       <= id_ex_pipe_i.abort_op; // MPU exceptions and watchpoint triggers have WB timing and will not impact ex_wb_pipe.abort_op
         // Deassert rf_we in case of illegal csr instruction or when the first half of a misaligned/split LSU goes to WB.
         // Also deassert if CSR was accepted both by eXtension if and pipeline
-        ex_wb_pipe_o.rf_we          <= csr_is_illegal ? 1'b0 : id_ex_pipe_i.rf_we;
+        ex_wb_pipe_o.rf_we          <= (csr_is_illegal || lsu_split_i) ? 1'b0 : id_ex_pipe_i.rf_we;
         //ex_wb_pipe_o.lsu_en      <= id_ex_pipe_i.lsu_en;
 
         if (id_ex_pipe_i.rf_we) begin
@@ -489,17 +489,17 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
   // ALU is single-cycle and output is therefore immediately valid (no handshake to optimize timing)
   assign alu_valid = 1'b1;
   //assign alu_ready = wb_ready_i;
-  assign alu_ready = !id_ex_pipe_i.alu_en || wb_ready_i;
+  assign alu_ready = (!id_ex_pipe_i.alu_en && !id_ex_pipe_i.instr_valid) || wb_ready_i;
 
   // CSR is single-cycle and output is therefore immediately valid (no handshake to optimize timing)
   assign csr_valid = 1'b1;
   //assign csr_ready = wb_ready_i;
-  assign csr_ready = !id_ex_pipe_i.csr_en || wb_ready_i;
+  assign csr_ready = (!id_ex_pipe_i.csr_en && !id_ex_pipe_i.instr_valid) || wb_ready_i;
 
   // SYS instructions (ebreak, wfi, etc.) are single-cycle (and have no result output) (no handshake to optimize timing)
   assign sys_valid = 1'b1;
   //assign sys_ready = wb_ready_i;
-  assign sys_ready = !id_ex_pipe_i.sys_en || wb_ready_i;
+  assign sys_ready = (!id_ex_pipe_i.sys_en && !id_ex_pipe_i.instr_valid) || wb_ready_i;
 
   // EX stage is ready immediately when killed and otherwise when its functional units are ready,
   // unless the stage is being halted. The late (data_rvalid_i based) downstream wb_ready_i signal
@@ -528,7 +528,7 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
   // result handshake is received in a single cycle or not.
   assign xif_valid = 1'b1;
   //assign xif_ready = wb_ready_i;
-  assign xif_ready = !id_ex_pipe_i.xif_en || wb_ready_i;
+  assign xif_ready = (!id_ex_pipe_i.xif_en && !id_ex_pipe_i.instr_valid) || wb_ready_i;
 
   // TODO: The EX stage needs to be ready to receive a result from a single cycle offloaded
   // instruction. In such case the result can be written into ex_wb_pipe_i.rf_wdata (as if the XIF
